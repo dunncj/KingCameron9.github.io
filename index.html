@@ -2,13 +2,37 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Vite App</title>
-    <script type="module" crossorigin src="/assets/index-17bea1d1.js"></script>
+    <title>Cameron Dunn Personal</title>
+    <!-- <script type="module" crossorigin src="/assets/index-17bea1d1.js"></script> -->
   </head>
   <body>
-    <div id="app"></div>
-    
+    <div id="site">
+      <h2>Cameron Dunn</h2>
+      <h4>About me</h4>
+      <p>
+        Hello. My name is Cameron Dunn. I am currently a Senior in high school.
+        I love computers, programming, and all things in between.
+      </p>
+      <h4>Contact</h4>
+      <p>Email: cameron@camerodunn.net</p>
+    </div>
   </body>
+  <style>
+    :host,
+    :root {
+      --rem: 16;
+    }
+    body {
+      line-height: 1.4;
+      font-size: 16px;
+      padding: 0 10px;
+      margin: 50px auto;
+      max-width: 650px;
+    }
+    #site {
+      max-width: 42em;
+      margin: 15 auto;
+    }
+  </style>
 </html>
