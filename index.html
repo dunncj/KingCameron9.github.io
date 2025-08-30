@@ -8,31 +8,180 @@
   </head>
   <body>
     <div id="site">
-      <h2>Cameron Dunn</h2>
-      <h4>About me</h4>
-      <p>
-        Hello. My name is Cameron Dunn. I am currently a Senior in high school.
-        I love computers, programming, and all things in between.
-      </p>
-      <h4>Contact</h4>
-      <p>Email: cameron@camerondunn.net</p>
-    </div>
-  </body>
-  <style>
-    :host,
-    :root {
-      --rem: 16;
-    }
-    body {
-      line-height: 1.4;
-      font-size: 16px;
-      padding: 0 10px;
-      margin: 50px auto;
-      max-width: 650px;
-    }
-    #site {
-      max-width: 42em;
-      margin: 15 auto;
-    }
-  </style>
-</html>
+
+      <!DOCTYPE html>
+      <html lang="en">
+      <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Cameron Dunn Resume</title>
+        <link rel="icon" href="vite.svg" type="image/svg+xml">
+        <!-- Google Fonts: Inter -->
+        <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+        <style>
+          .contact a {
+            color: #0077ff;
+            text-decoration: none;
+            font-weight: 500;
+            border-bottom: 1.5px solid #e3e8ee;
+            transition: color 0.2s, border-bottom 0.2s;
+          }
+          .contact a:hover {
+            color: #005fcc;
+            border-bottom: 1.5px solid #0077ff;
+          }
+          body {
+            background: #fff;
+            color: #23272f;
+            font-family: 'Inter', Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            height: 100vh;
+            overflow: hidden;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+          }
+          .container {
+            max-width: 650px;
+            height: 80vh;
+            min-height: 0;
+            margin: 0 auto;
+            padding: 18px 18px 12px 18px;
+            box-shadow: 0 4px 18px rgba(0,0,0,0.07);
+            border-radius: 14px;
+            background: #fff;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+          }
+          h1 {
+            font-size: 1.7rem;
+            margin-bottom: 0.1em;
+            font-weight: 700;
+            letter-spacing: 0.5px;
+          }
+          .contact {
+            font-size: 0.98rem;
+            margin-bottom: 1.2em;
+            color: #444;
+            display: flex;
+            gap: 2em;
+            align-items: center;
+          }
+          .download {
+            display: inline-block;
+            margin-bottom: 2em;
+            padding: 0.8em 1.7em;
+            background: linear-gradient(90deg, #0077ff 0%, #00c6ff 100%);
+            color: #fff;
+            border-radius: 10px;
+            text-decoration: none;
+            font-weight: 600;
+            font-size: 1.1rem;
+            box-shadow: 0 2px 8px rgba(0,119,255,0.08);
+            transition: background 0.2s, box-shadow 0.2s;
+          }
+          .download:hover {
+            background: linear-gradient(90deg, #005fcc 0%, #0099cc 100%);
+            box-shadow: 0 4px 16px rgba(0,119,255,0.13);
+          }
+          .section {
+            margin-bottom: 1.2em;
+          }
+          .section-title {
+            font-size: 1.08rem;
+            color: #0077ff;
+            margin-bottom: 0.5em;
+            font-weight: 700;
+            letter-spacing: 0.3px;
+          }
+          ul {
+            padding-left: 1.1em;
+          }
+          li {
+            margin-bottom: 0.3em;
+          }
+          .resume-preview {
+            margin-top: 2.5em;
+            text-align: center;
+          }
+          .resume-iframe {
+            width: 100%;
+            height: 600px;
+            border: 1px solid #e3e8ee;
+            border-radius: 10px;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.04);
+          }
+          .resume-btn {
+            display: block;
+            width: 100%;
+            margin: 0 auto;
+            margin-top: 1.2em;
+            margin-bottom: 0.3em;
+            padding: 0.6em 0;
+            background: linear-gradient(90deg, #00c6ff 0%, #0077ff 100%);
+            color: #fff;
+            border: none;
+            border-radius: 8px;
+            font-weight: 600;
+            font-size: 1rem;
+            cursor: pointer;
+            box-shadow: 0 2px 8px rgba(0,119,255,0.08);
+            transition: background 0.2s, box-shadow 0.2s;
+          }
+          .resume-btn:hover {
+            background: linear-gradient(90deg, #0099cc 0%, #005fcc 100%);
+            box-shadow: 0 4px 16px rgba(0,119,255,0.13);
+          }
+          @media (max-width: 600px) {
+            .container {
+              padding: 16px 4px;
+            }
+            .resume-iframe {
+              height: 400px;
+            }
+          }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div>
+            <h1>Cameron Dunn</h1>
+            <div class="contact" style="margin-bottom:1.2em;">
+              <span>Email: <a href="mailto:cameron.dunn@illinois.edu">cameron.dunn@illinois.edu</a></span>
+              <span>LinkedIn: <a href="https://linkedin.com/in/camerondunn" target="_blank">linkedin.com/in/camerondunn</a></span>
+              <span>GitHub: <a href="https://github.com/KingCameron9" target="_blank">github.com/KingCameron9</a></span>
+            </div>
+            <div class="section">
+              <div class="section-title">About Me</div>
+              <p>Hello, I'm Cameron! A student at UIUC with a passion for building impactful products, learning new technologies, and solving real-world problems. I thrive in collaborative environments and enjoy working across the stack.</p>
+            </div>
+            <div class="section">
+              <div class="section-title">Skills</div>
+              <ul>
+                <li>Python, Java, JavaScript, TypeScript, C++</li>
+                <li>React, Node.js, Express, WebRTC</li>
+                <li>Git, Docker, CI/CD</li>
+                <li>Cloud: AWS, Firebase</li>
+                <li>Other: Linux, Nix, MacOS</li>
+              </ul>
+            </div>
+            <div class="section">
+              <div class="section-title">Experience</div>
+              <ul>
+                <li>Software Engineer, TechCorp (2023-Present)<br><span style="color:#555;font-size:0.98em;">Developed scalable web applications and led migration to cloud infrastructure.</span></li>
+                <li>Intern, WebStart (2022-2023)<br><span style="color:#555;font-size:0.98em;">Built internal tools and automated deployment pipelines.</span></li>
+              </ul>
+            </div>
+            <div class="section">
+              <div class="section-title">Education</div>
+              <ul>
+                <li>B.S. in Computer Science, University of Illinois -- Urbana-Champaign (2028)</li>
+              </ul>
+            </div>
+            <button class="resume-btn" onclick="window.open('CameronDunn_Resume.pdf', '_blank')">Download Resume</button>
+          </div>
+        </div>
+      </body>
+      </html>
