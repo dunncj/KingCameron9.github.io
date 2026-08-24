@@ -4,6 +4,7 @@ import {
 } from 'three';
 import { getMovementCurve } from './flightCurves';
 import { settings } from './settings/store';
+import { patchShaderSource } from './shaders';
 
 // The landing experience: one continuous 3D camera, never a hard cut to a
 // separate renderer. Mounts a live, pixelated satellite-imagery patch onto
@@ -203,17 +204,18 @@ function sphereEast(lonDeg) {
 // out from the black background.
 function applyGlobeShading(material) {
   material.onBeforeCompile = (shader) => {
-    shader.vertexShader = shader.vertexShader
-      .replace('#include <common>', '#include <common>\nvarying vec3 vNormalView;')
-      .replace(
-        '#include <begin_vertex>',
-        '#include <begin_vertex>\nvNormalView = normalize(mat3(modelViewMatrix) * normalize(position));',
-      );
-    shader.fragmentShader = shader.fragmentShader
-      .replace('#include <common>', '#include <common>\nvarying vec3 vNormalView;')
-      .replace(
-        '#include <map_fragment>',
-        `#include <map_fragment>
+    shader.vertexShader = patchShaderSource(shader.vertexShader, [
+      { find: '#include <common>', replace: '#include <common>\nvarying vec3 vNormalView;' },
+      {
+        find: '#include <begin_vertex>',
+        replace: '#include <begin_vertex>\nvNormalView = normalize(mat3(modelViewMatrix) * normalize(position));',
+      },
+    ], 'globe shading (vertex)');
+    shader.fragmentShader = patchShaderSource(shader.fragmentShader, [
+      { find: '#include <common>', replace: '#include <common>\nvarying vec3 vNormalView;' },
+      {
+        find: '#include <map_fragment>',
+        replace: `#include <map_fragment>
         {
           // Fixed in view space (not world space) so the "sunlit" side always
           // faces the same on-screen direction regardless of how far the
@@ -225,7 +227,8 @@ function applyGlobeShading(material) {
           float rim = pow(1.0 - clamp(vNormalView.z, 0.0, 1.0), 3.0);
           diffuseColor.rgb += vec3(0.5, 0.72, 1.0) * rim * 0.5;
         }`,
-      );
+      },
+    ], 'globe shading (fragment)');
   };
   material.needsUpdate = true;
 }

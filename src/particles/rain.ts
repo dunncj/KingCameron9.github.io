@@ -1,4 +1,4 @@
-// Rain: short falling line-segment streaks, GPU-driven (see wrapField.glsl.ts)
+// Rain: short falling line-segment streaks, GPU-driven (see shaders/wrapField.glsl.ts)
 // — each streak's position is computed on the GPU from a fixed-at-spawn
 // random seed plus a shared `time` uniform, so a frame's only CPU work is a
 // handful of uniform updates, never a per-particle loop or a buffer
@@ -7,7 +7,7 @@ import {
   BufferGeometry, BufferAttribute, Color, LineSegments, ShaderMaterial, Vector2, Vector3, Object3D,
 } from 'three';
 import { skipDuringOverridePass } from './overridePass';
-import { WRAP_FIELD_GLSL, createWrapFieldUniforms } from './wrapField.glsl';
+import { WRAP_FIELD_GLSL, createWrapFieldUniforms } from '../shaders';
 import { intensityToDensityFraction, intensityToOpacityFraction, intensityToSpeedScale } from './intensity';
 
 export interface RainParams {

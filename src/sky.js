@@ -1,8 +1,9 @@
 import {
   Vector3, MathUtils, CanvasTexture, Sprite, SpriteMaterial, NormalBlending, AdditiveBlending, Color,
-  BufferGeometry, BufferAttribute, ShaderMaterial, Points,
+  BufferGeometry, BufferAttribute, Points,
 } from 'three';
 import { Sky } from 'three/addons/objects/Sky.js';
+import { createShaderMaterial, patchShaderSource } from './shaders';
 
 const SUN_WHITE = new Color(0xffffff);
 const SUN_WARM = new Color(0xff8a3d);
@@ -176,7 +177,7 @@ function buildStars() {
   // uniforms replace PointsMaterial's `.color`/`.opacity` API (the night
   // sky's tint-compensation and day/night fade still apply the same way,
   // just written into these instead).
-  const material = new ShaderMaterial({
+  const starMaterial = createShaderMaterial({
     uniforms: {
       map: { value: makeStarTexture() },
       tint: { value: new Color(1, 1, 1) },
@@ -218,7 +219,7 @@ function buildStars() {
     blending: AdditiveBlending,
   });
 
-  const points = new Points(geometry, material);
+  const points = new Points(geometry, starMaterial.material);
   points.frustumCulled = false;
   // Three.js sorts transparent objects back-to-front using each object's
   // *container* position, not its actual geometry — and this container's
@@ -242,7 +243,11 @@ function buildStars() {
     geometry.setDrawRange(0, scene.overrideMaterial ? 0 : starDrawCount);
   };
 
-  return { points, setDrawCount: (count) => { starDrawCount = count; } };
+  return {
+    points,
+    setDrawCount: (count) => { starDrawCount = count; },
+    setUniforms: starMaterial.set,
+  };
 }
 
 export function buildSky(scene) {
@@ -253,32 +258,25 @@ export function buildSky(scene) {
   // leftover 0.00002 scale, crushing every cloud pixel to near-black no
   // matter the coverage/density — the mixes just above it already produce a
   // properly-scaled ~0.3-1.9 cloud color, so drop the multiply entirely.
-  sky.material.fragmentShader = sky.material.fragmentShader.replace(
-    'cloudColor *= vSunE * 0.00002;',
-    '',
-  );
-  // The addon's cloud UV scroll (`cloudUV += time * cloudSpeed`) adds a
-  // bare scalar to a vec2 — an identical offset on both axes, which is a
-  // fixed 45° drift direction no matter what's actually going on. That's
-  // completely disconnected from the wind direction driving the 3D cloud
-  // clusters (and rain/snow/wind-streaks), so the high-altitude sky-dome
-  // clouds always crawled the same diagonal while the physical clouds blew
-  // wherever the wind actually pointed — one obviously fake next to the
-  // other. A `windDir` uniform (radians, set from the same gust.direction
-  // everything else uses) makes both layers drift together — subtracted,
-  // not added: this offsets the *sample* coordinate the cloud pattern is
-  // read from, and shifting where you sample from by +X moves the visible
-  // pattern by -X (the same reason scrolling a background texture to the
-  // right means subtracting from its U offset), the opposite of directly
-  // translating an object's position the way the 3D clusters do.
-  sky.material.fragmentShader = sky.material.fragmentShader.replace(
-    'uniform float time;',
-    'uniform float time;\n\t\t\tuniform float windDir;',
-  );
-  sky.material.fragmentShader = sky.material.fragmentShader.replace(
-    'cloudUV += time * cloudSpeed;',
-    'cloudUV -= vec2(cos(windDir), sin(windDir)) * time * cloudSpeed;',
-  );
+  sky.material.fragmentShader = patchShaderSource(sky.material.fragmentShader, [
+    { find: 'cloudColor *= vSunE * 0.00002;', replace: '' },
+    // The addon's cloud UV scroll (`cloudUV += time * cloudSpeed`) adds a
+    // bare scalar to a vec2 — an identical offset on both axes, which is a
+    // fixed 45° drift direction no matter what's actually going on. That's
+    // completely disconnected from the wind direction driving the 3D cloud
+    // clusters (and rain/snow/wind-streaks), so the high-altitude sky-dome
+    // clouds always crawled the same diagonal while the physical clouds blew
+    // wherever the wind actually pointed — one obviously fake next to the
+    // other. A `windDir` uniform (radians, set from the same gust.direction
+    // everything else uses) makes both layers drift together — subtracted,
+    // not added: this offsets the *sample* coordinate the cloud pattern is
+    // read from, and shifting where you sample from by +X moves the visible
+    // pattern by -X (the same reason scrolling a background texture to the
+    // right means subtracting from its U offset), the opposite of directly
+    // translating an object's position the way the 3D clusters do.
+    { find: 'uniform float time;', replace: 'uniform float time;\n\t\t\tuniform float windDir;' },
+    { find: 'cloudUV += time * cloudSpeed;', replace: 'cloudUV -= vec2(cos(windDir), sin(windDir)) * time * cloudSpeed;' },
+  ], 'Sky addon');
   sky.material.uniforms.windDir = { value: 0 };
   sky.material.needsUpdate = true;
   sky.scale.setScalar(45000);
@@ -349,9 +347,10 @@ export function buildSky(scene) {
   moonSprite.scale.setScalar(2000);
   scene.add(moonSprite);
 
-  const { points: stars, setDrawCount: setStarDrawCount } = buildStars();
+  const { points: stars, setDrawCount: setStarDrawCount, setUniforms: setStarUniforms } = buildStars();
   scene.add(stars);
   const tintCompensation = new Color();
+  const starTint = new Color();
 
   function update({
     elevation, azimuth, turbidity, rayleigh, mieCoefficient, mieDirectionalG,
@@ -448,7 +447,8 @@ export function buildSky(scene) {
     // shows a brighter, denser night sky than one washed out by a nearby
     // city's glow.
     moonSprite.material.color.copy(MOON_COLOR).multiply(tintCompensation).multiplyScalar(2.4 * nightBrightness);
-    stars.material.uniforms.tint.value.copy(tintCompensation).multiplyScalar(nightBrightness);
+    starTint.copy(tintCompensation).multiplyScalar(nightBrightness);
+    setStarUniforms({ tint: starTint });
 
     // --- Stars --- fade in through dusk and stay out through the day. A
     // straight degrees-below-horizon ramp (not a sine curve, which is steep
@@ -469,11 +469,13 @@ export function buildSky(scene) {
     // no matter how bright this value was within a smaller ceiling. This
     // headroom is what lets a star punch back through that tint and still
     // read as a bright white point instead of the tint's own color.
-    stars.material.uniforms.opacity.value = starVisibility * MathUtils.clamp(starBrightness, 0, 6) * cloudFade;
+    setStarUniforms({ opacity: starVisibility * MathUtils.clamp(starBrightness, 0, 6) * cloudFade });
     setStarDrawCount(Math.floor(STAR_COUNT * MathUtils.clamp(starDensity, 0, 1)));
 
     return sunDirection;
   }
 
-  return { sky, sunSprite, moonSprite, stars, sunDirection, update };
+  return {
+    sky, sunSprite, moonSprite, stars, sunDirection, update, setStarUniforms,
+  };
 }

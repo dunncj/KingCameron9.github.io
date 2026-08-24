@@ -4,7 +4,10 @@
 // vertices, every frame), each particle's position is computed *on the GPU*
 // from a fixed-at-spawn random seed plus a single shared `time` uniform —
 // so the only thing that changes per frame is a handful of uniforms, not a
-// vertex buffer.
+// vertex buffer. Lives here (not in particles/) because the trick has
+// nothing to do with rain/snow specifically — any GPU-driven effect that
+// wants "infinitely looping motion around a moving origin" (embers, leaves,
+// debris) can pull in the same chunk.
 //
 // wrapFieldPosition(seed, velocity) returns a position that appears to fall
 // (or drift) forever: `seed * fieldSize + velocity * time` grows without

@@ -20,4 +20,7 @@ export const SNOW_MAX_INTENSITY = 3;
 export { createSoftCircleTexture, createSoftStreakTexture } from './textures';
 export { skipDuringOverridePass, skipInstancedDuringOverridePass } from './overridePass';
 export { intensityToDensityFraction, intensityToOpacityFraction, intensityToSpeedScale } from './intensity';
-export { WRAP_FIELD_GLSL, createWrapFieldUniforms, type WrapFieldUniforms } from './wrapField.glsl';
+
+// The GPU wrap-field technique itself (see rain.ts) now lives in the shader
+// service at ../shaders — it's generic infrastructure, not particle-
+// specific — import WRAP_FIELD_GLSL/createWrapFieldUniforms from there.

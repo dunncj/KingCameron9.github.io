@@ -3,7 +3,7 @@
 // gliding through the air, no matter how it's textured. Each ribbon is a
 // multi-segment strip whose vertices get displaced sideways by a
 // per-instance sine wave (phase/amplitude/frequency randomized at spawn),
-// GPU-driven the same way as rain.ts/snow.ts (see wrapField.glsl.ts): each
+// GPU-driven the same way as rain.ts/snow.ts (see shaders/wrapField.glsl.ts): each
 // wisp's drift position comes from a fixed-at-spawn seed plus shared `time`/
 // `wind` uniforms, so there's no per-frame CPU loop and no per-frame
 // instance-matrix re-upload — orientation, bend, and drift all live in the
@@ -15,7 +15,7 @@ import {
   Vector2, Vector3, Object3D, DoubleSide,
 } from 'three';
 import { skipInstancedDuringOverridePass } from './overridePass';
-import { WRAP_FIELD_GLSL, createWrapFieldUniforms } from './wrapField.glsl';
+import { WRAP_FIELD_GLSL, createWrapFieldUniforms } from '../shaders';
 import { createSoftStreakTexture } from './textures';
 
 export interface WindStreaksParams {

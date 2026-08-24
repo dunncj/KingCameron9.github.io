@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { createShaderMaterial } from './shaders';
 
 // A soft, irregular cumulus silhouette baked from a handful of overlapping
 // blurred blobs rather than one perfect circle — a single puff needs to
@@ -184,7 +185,7 @@ const STORM_DARK = new THREE.Color(0x5c6170);
 
 export function buildClouds(scene, initialPosition = new THREE.Vector3()) {
   const geometry = new THREE.PlaneGeometry(1, 1);
-  const material = new THREE.ShaderMaterial({
+  const cloudMaterial = createShaderMaterial({
     uniforms: {
       map: { value: makeCloudTexture() },
       opacity: { value: 0.85 },
@@ -199,7 +200,7 @@ export function buildClouds(scene, initialPosition = new THREE.Vector3()) {
     side: THREE.DoubleSide,
   });
 
-  const mesh = new THREE.InstancedMesh(geometry, material, TOTAL_PUFFS);
+  const mesh = new THREE.InstancedMesh(geometry, cloudMaterial.material, TOTAL_PUFFS);
   mesh.frustumCulled = false;
   scene.add(mesh);
 
@@ -401,16 +402,18 @@ export function buildClouds(scene, initialPosition = new THREE.Vector3()) {
     // nightAmount fixes that without touching the daytime look at all
     // (boost is exactly 1 at nightAmount 0).
     const nightOpacityBoost = THREE.MathUtils.lerp(1, 1.8, THREE.MathUtils.clamp(nightAmount ?? 0, 0, 1));
-    material.uniforms.opacity.value = THREE.MathUtils.clamp(
-      (THREE.MathUtils.clamp(density, 0, 1) * 0.55 + 0.08) * nightOpacityBoost,
-      0, 0.97,
-    );
+    cloudMaterial.set({
+      opacity: THREE.MathUtils.clamp(
+        (THREE.MathUtils.clamp(density, 0, 1) * 0.55 + 0.08) * nightOpacityBoost,
+        0, 0.97,
+      ),
+      fogColor: ambientColor,
+    });
     // Thinner-looking puffs at low density, not just fewer/dimmer ones —
     // otherwise light-weather clusters were built from the exact same puff
     // sizes as a thick overcast ceiling and just looked like a sparser
     // version of the same heavy cloud instead of genuinely wispy.
     const densityScale = THREE.MathUtils.lerp(0.55, 1, THREE.MathUtils.clamp(density, 0, 1));
-    material.uniforms.fogColor.value.copy(ambientColor);
 
     // A flat base speed plus a moderate wind scaling, not a straight
     // windSpeed multiplier — at the old 0.6x, even a calm 6 mph preset only

@@ -7,7 +7,7 @@ import {
   createRainField, createSnowField, createWindStreaks, RAIN_MAX_INTENSITY, SNOW_MAX_INTENSITY,
 } from './particles';
 import { buildClouds, CLOUD_FORMATIONS } from './clouds.js';
-import { buildComposer } from './postprocessing.js';
+import { createPostFxService } from './postprocessing';
 import { buildPlayerPanel } from './player.js';
 import { buildDevConsole } from './devconsole';
 import {
@@ -132,11 +132,11 @@ const windStreaks = createWindStreaks(scene);
 const clouds = buildClouds(scene, camera.position);
 
 // --- Postprocessing ---
-const {
-  composer, renderPixelatedPass, godRaysPass, bloomPass, weatherGradePass, windBlurPass, zoomBlurPass,
-} = buildComposer(renderer, scene, camera, settings.pixelArt.pixelSize);
-renderPixelatedPass.normalEdgeStrength = settings.pixelArt.normalEdgeStrength;
-renderPixelatedPass.depthEdgeStrength = settings.pixelArt.depthEdgeStrength;
+const postFx = createPostFxService(renderer, scene, camera, settings.pixelArt.pixelSize);
+postFx.pixelation.set({
+  normalEdgeStrength: settings.pixelArt.normalEdgeStrength,
+  depthEdgeStrength: settings.pixelArt.depthEdgeStrength,
+});
 
 // The scene only ever gets rasterized at 1/pixelSize resolution before
 // RenderPixelatedPass upscales it — telling the tile LOD system the full
@@ -147,7 +147,8 @@ renderPixelatedPass.depthEdgeStrength = settings.pixelArt.depthEdgeStrength;
 // pixelation pass immediately throws away.
 function syncTilesResolution() {
   const size = renderer.getSize(new THREE.Vector2());
-  tiles.setResolution(camera, size.x / renderPixelatedPass.pixelSize, size.y / renderPixelatedPass.pixelSize);
+  const pixelSize = postFx.pixelation.pass.pixelSize;
+  tiles.setResolution(camera, size.x / pixelSize, size.y / pixelSize);
 }
 syncTilesResolution();
 
@@ -855,16 +856,16 @@ async function buildDevGui() {
 
   const pixelFolder = gui.addFolder('Pixel Art');
   pixelFolder.close();
-  // Bound to settings.pixelArt (not renderPixelatedPass directly) so
+  // Bound to settings.pixelArt (not the pass directly) so
   // ":settings set pixelArt.pixelSize 5" and this slider both drive the
   // same value — onChange pushes it into the actual pass, which doesn't
   // read live from a params object the way sky/fx do.
-  pixelFolder.add(settings.pixelArt, 'pixelSize', 1, 16, 1).onChange((v) => renderPixelatedPass.setPixelSize(v));
+  pixelFolder.add(settings.pixelArt, 'pixelSize', 1, 16, 1).onChange((v) => postFx.pixelation.set({ pixelSize: v }));
   pixelFolder.add(settings.pixelArt, 'normalEdgeStrength', 0, 2, 0.05).onChange((v) => {
-    renderPixelatedPass.normalEdgeStrength = v;
+    postFx.pixelation.set({ normalEdgeStrength: v });
   });
   pixelFolder.add(settings.pixelArt, 'depthEdgeStrength', 0, 1, 0.05).onChange((v) => {
-    renderPixelatedPass.depthEdgeStrength = v;
+    postFx.pixelation.set({ depthEdgeStrength: v });
   });
 
   // --- Teleport UI (lat/lon coordinates) ---
@@ -1094,8 +1095,8 @@ function prefetchLocationHeavy(name) {
   const {
     resolutionScale, wideResW, wideResH, durationMs, staggerMs,
   } = heavyPrefetchParams;
-  const resW = Math.max(64, Math.round((size.x / renderPixelatedPass.pixelSize) * resolutionScale));
-  const resH = Math.max(64, Math.round((size.y / renderPixelatedPass.pixelSize) * resolutionScale));
+  const resW = Math.max(64, Math.round((size.x / postFx.pixelation.pass.pixelSize) * resolutionScale));
+  const resH = Math.max(64, Math.round((size.y / postFx.pixelation.pass.pixelSize) * resolutionScale));
   const jobs = [
     // The far end of the shot — where the local view actually settles, and
     // the one most worth arriving with full detail already resident.
@@ -1725,17 +1726,17 @@ function updateLighting() {
   fog.color.copy(skyTone).lerp(overcastColor, cloudParams.coverage);
 
   frameTint.copy(skyTone).lerp(overcastColor, cloudParams.coverage * 0.5);
-  const weatherTintArr = weatherGradePass.uniforms.tint.value;
-  weatherTintArr[0] = frameTint.r; weatherTintArr[1] = frameTint.g; weatherTintArr[2] = frameTint.b;
   bloomTint.copy(WHITE).lerp(SUN_GLOW, twilight);
-  const bloomTintArr = bloomPass.uniforms.tint.value;
-  bloomTintArr[0] = bloomTint.r; bloomTintArr[1] = bloomTint.g; bloomTintArr[2] = bloomTint.b;
   // Lighter touch than before — cloudy days should stay cool and blue, not
   // wash all the way to flat grey.
-  weatherGradePass.uniforms.desaturate.value = THREE.MathUtils.clamp(
-    cloudParams.coverage * 0.22 + (stormParams.enabled ? 0.15 : 0), 0, 0.4,
-  );
-  weatherGradePass.uniforms.vignetteStrength.value = fxParams.vignette;
+  postFx.weatherGrade.set({
+    tint: [frameTint.r, frameTint.g, frameTint.b],
+    desaturate: THREE.MathUtils.clamp(
+      cloudParams.coverage * 0.22 + (stormParams.enabled ? 0.15 : 0), 0, 0.4,
+    ),
+    vignetteStrength: fxParams.vignette,
+  });
+  postFx.bloom.set({ tint: [bloomTint.r, bloomTint.g, bloomTint.b] });
 
   // Earth view (the globe overview) is lit like a view from space, not a
   // ground-level sunset/sunrise — none of the above, all driven by the
@@ -1743,15 +1744,11 @@ function updateLighting() {
   // desaturation/vignette. Stars are forced fully on too: day/night is a
   // ground-level phenomenon that doesn't apply from space.
   if (overviewActive) {
-    const t = weatherGradePass.uniforms.tint.value;
     // A touch brighter and more saturated than the raw satellite photos —
     // reads more like a vivid "postcard" globe, less like a flat scan.
-    t[0] = 1.08; t[1] = 1.08; t[2] = 1.1;
-    weatherGradePass.uniforms.desaturate.value = -0.22;
-    weatherGradePass.uniforms.vignetteStrength.value = 0;
-    const bt = bloomPass.uniforms.tint.value;
-    bt[0] = 1; bt[1] = 1; bt[2] = 1;
-    sky.stars.material.uniforms.opacity.value = 1;
+    postFx.weatherGrade.set({ tint: [1.08, 1.08, 1.1], desaturate: -0.22, vignetteStrength: 0 });
+    postFx.bloom.set({ tint: [1, 1, 1] });
+    sky.setStarUniforms({ opacity: 1 });
   }
 
   return sunDir;
@@ -1764,7 +1761,7 @@ function updateGodRays(sunDir) {
   // rather than let it fire based on the simulated ground clock's sun
   // position, which has nothing to do with the earth view.
   if (overviewActive) {
-    godRaysPass.enabled = false;
+    postFx.godRays.set({ strength: 0 });
     return;
   }
   camera.getWorldDirection(camForward);
@@ -1790,7 +1787,6 @@ function updateGodRays(sunDir) {
   // transition looks like a bug, not a feature.
   const flightFade = flight ? 0 : 1;
 
-  godRaysPass.uniforms.lightPosition.value.set((sunScreenPos.x + 1) / 2, (sunScreenPos.y + 1) / 2);
   // Steeper than a straight coverage falloff (squared, not linear): this
   // pass samples toward the sun from *every* bright pixel on screen, not
   // just ones near the sun, so a bright 3D cloud anywhere in frame can
@@ -1799,11 +1795,13 @@ function updateGodRays(sunDir) {
   const cloudDamp = (1 - cloudParams.coverage) ** 2;
   const strength =
     fxParams.godRayStrength * edgeFade * frontFade * elevationFade * cloudDamp * flightFade;
-  godRaysPass.uniforms.strength.value = strength;
   // Skips the pass's full-screen draw and render-target swap entirely once
   // it has nothing to contribute (sun below the horizon, facing away, mid-
   // flight, etc.) rather than running it just to blend in zero.
-  godRaysPass.enabled = strength > 0.001;
+  postFx.godRays.set({
+    lightPosition: [(sunScreenPos.x + 1) / 2, (sunScreenPos.y + 1) / 2],
+    strength,
+  });
 }
 
 // Directional streak blur along the wind's screen-projected direction —
@@ -1823,15 +1821,13 @@ function updateWindBlur() {
   dx /= len;
   dy /= len;
 
-  windBlurPass.uniforms.direction.value.set(dx, dy);
   // Only the sharpest gust peaks should trigger this at all — it reads as
   // generic blur, not "wind," if it's on any more often than that.
   const windAmount = THREE.MathUtils.clamp((gust.speed - 45) / 40, 0, 1);
   const strength = windAmount * windParams.streakBlur;
-  windBlurPass.uniforms.strength.value = strength;
   // Most days never cross the gust threshold at all — skip the pass's draw
   // entirely rather than running it every frame to blend in zero.
-  windBlurPass.enabled = strength > 0.001;
+  postFx.windBlur.set({ direction: [dx, dy], strength });
 }
 
 // Radial blur toward screen center — sells the speed of the overview's own
@@ -1869,10 +1865,9 @@ function updateZoomBlur() {
     const t = Math.min(flight.t / flight.duration, 1);
     strength = Math.max(strength, easeInCubic(t));
   }
-  zoomBlurPass.uniforms.strength.value = strength * fxParams.zoomBlurStrength;
   // Skip the pass's full-screen draw entirely the rest of the time, same as
   // every other situational effect here.
-  zoomBlurPass.enabled = strength > 0.001;
+  postFx.zoomBlur.set({ strength: strength * fxParams.zoomBlurStrength });
 }
 
 // How rough the current weather is, 0..1 — combines wind, rain, and snow
@@ -1961,11 +1956,11 @@ function updateLightning(dt) {
   flash *= Math.pow(0.0005, dt);
   lightning.position.set(camera.position.x, camera.position.y + 500, camera.position.z - 200);
   lightning.intensity = flash * 20;
-  weatherGradePass.uniforms.flash.value = flash * 0.6;
+  postFx.weatherGrade.set({ flash: flash * 0.6 });
 }
 
 function updatePostFX(nightAmount) {
-  renderer.toneMappingExposure = fxParams.exposure;
+  postFx.setExposure(fxParams.exposure);
   // Extra bloom at night, on top of whatever the weather preset already
   // wants — daytime bloom is tuned around the sun, and that same modest
   // strength left stars/moon reading as small tight dots with barely any
@@ -1975,9 +1970,11 @@ function updatePostFX(nightAmount) {
   // ground-clock concept that shouldn't visibly breathe in and out while
   // looking at the globe from space.
   const effectiveNightAmount = overviewActive ? 0 : nightAmount;
-  bloomPass.uniforms.strength.value = fxParams.bloomStrength + flash * 1.2 + effectiveNightAmount * 0.9;
-  bloomPass.uniforms.radius.value = fxParams.bloomRadius + effectiveNightAmount * 1.8;
-  bloomPass.uniforms.threshold.value = fxParams.bloomThreshold;
+  postFx.bloom.set({
+    strength: fxParams.bloomStrength + flash * 1.2 + effectiveNightAmount * 0.9,
+    radius: fxParams.bloomRadius + effectiveNightAmount * 1.8,
+    threshold: fxParams.bloomThreshold,
+  });
 }
 
 // --- Resize ---
@@ -1985,8 +1982,7 @@ window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
-  composer.setSize(window.innerWidth, window.innerHeight);
-  bloomPass.uniforms.resolution.value.set(window.innerWidth, window.innerHeight);
+  postFx.resize(window.innerWidth, window.innerHeight);
   syncTilesResolution();
 });
 
@@ -2161,7 +2157,7 @@ function tick() {
   camera.position.add(renderOffset);
 
   tiles.update();
-  composer.render();
+  postFx.render();
 
   camera.fov = baseFov;
   camera.updateProjectionMatrix();

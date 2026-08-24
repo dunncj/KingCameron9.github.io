@@ -1,11 +1,11 @@
 // Snow: drifting, swaying point sprites — same GPU-driven wrap-field
-// technique as rain.ts (see wrapField.glsl.ts), so a frame's only CPU work
+// technique as rain.ts (see shaders/wrapField.glsl.ts), so a frame's only CPU work
 // is a handful of uniform updates regardless of pool size.
 import {
   BufferGeometry, BufferAttribute, Color, Points, ShaderMaterial, Vector2, Vector3, Object3D,
 } from 'three';
 import { skipDuringOverridePass } from './overridePass';
-import { WRAP_FIELD_GLSL, createWrapFieldUniforms } from './wrapField.glsl';
+import { WRAP_FIELD_GLSL, createWrapFieldUniforms } from '../shaders';
 import { intensityToDensityFraction, intensityToOpacityFraction, intensityToSpeedScale } from './intensity';
 import { createSoftCircleTexture } from './textures';
 
