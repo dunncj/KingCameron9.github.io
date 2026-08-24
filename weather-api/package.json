@@ -1,0 +1,11 @@
+{
+  "name": "weather-api",
+  "version": "1.0.0",
+  "description": "Standalone wrapper API that returns example weather data for the website's locations.",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "license": "ISC"
+}
