@@ -1,4 +1,4 @@
-// The ":settings" devconsole command — see devconsole.js for the command
+// The ":settings" devconsole command — see devconsole.ts for the command
 // shape this returns (`{ name, description, args, run }`) and main.js for
 // where it's registered alongside the rest of the command list.
 // A factory function, not a class: `buildSettingsCommand(guiControl)`
