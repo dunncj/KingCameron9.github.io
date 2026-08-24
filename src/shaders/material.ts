@@ -14,6 +14,14 @@ export interface ShaderMaterialDefinition<U extends UniformMap> {
   blending?: Blending;
 }
 
+// A uniform whose current value exposes both .copy(other) and .set(...args)
+// (Vector2/Vector3/Color all do) accepts either its own type or a plain
+// number tuple as a settable value — matching what assignUniformValue
+// actually does at runtime below. Anything else only accepts its own type.
+type Settable<T> = T extends { copy: (v: T) => unknown; set: (...args: number[]) => unknown }
+  ? T | number[]
+  : T;
+
 export interface ManagedShaderMaterial<U extends UniformMap> {
   material: ShaderMaterial;
   uniforms: U;
@@ -26,7 +34,7 @@ export interface ManagedShaderMaterial<U extends UniformMap> {
   // Vector3/Color instance is copied in, a plain array is spread through
   // `.set(...)`, anything else (numbers, textures) replaces `.value`
   // directly.
-  set(values: Partial<{ [K in keyof U]: U[K]['value'] }>): void;
+  set(values: Partial<{ [K in keyof U]: Settable<U[K]['value']> }>): void;
 }
 
 function assignUniformValue(uniform: { value: unknown }, next: unknown): void {
@@ -60,8 +68,9 @@ export function createShaderMaterial<U extends UniformMap>(
     set(values) {
       for (const key of Object.keys(values) as (keyof U)[]) {
         const next = values[key];
-        if (next === undefined) continue;
-        assignUniformValue(uniforms[key], next);
+        const uniform = uniforms[key];
+        if (next === undefined || uniform === undefined) continue;
+        assignUniformValue(uniform, next);
       }
     },
   };

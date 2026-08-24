@@ -3,11 +3,9 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { buildScene } from './scene.js';
 import { buildTiles } from './tiles.js';
 import { buildSky } from './sky.js';
-import {
-  createRainField, createSnowField, createWindStreaks, RAIN_MAX_INTENSITY, SNOW_MAX_INTENSITY,
-} from './particles';
 import { buildClouds, CLOUD_FORMATIONS } from './clouds.js';
 import { createPostFxService } from './postprocessing';
+import { createWeatherSystem } from './weather';
 import { buildPlayerPanel } from './player.js';
 import { buildDevConsole } from './devconsole';
 import {
@@ -125,10 +123,7 @@ scene.background = null; // the sky dome is the backdrop now
 const tiles = buildTiles(camera, renderer);
 scene.add(tiles.group);
 
-// --- Weather particles ---
-const rain = createRainField(scene, settings.rain);
-const snow = createSnowField(scene, settings.snow);
-const windStreaks = createWindStreaks(scene);
+// --- Clouds ---
 const clouds = buildClouds(scene, camera.position);
 
 // --- Postprocessing ---
@@ -151,6 +146,37 @@ function syncTilesResolution() {
   tiles.setResolution(camera, size.x / pixelSize, size.y / pixelSize);
 }
 syncTilesResolution();
+
+// --- Weather --- rain/snow/wind streaks (the particles service), wind
+// blur and lightning flash (the postprocessing service), and the state/
+// simulation driving all of it. `gui`/`playerPanel`/`estimatedTempF` below
+// are read inside onPresetApplied only once a preset is actually applied
+// (well after both exist), not at construction time here, so referencing
+// them this early is safe.
+const weather = createWeatherSystem({
+  scene,
+  camera,
+  postFx,
+  fog,
+  lightningLight: lightning,
+  rainSettings: settings.rain,
+  snowSettings: settings.snow,
+  cloudSettings: settings.clouds,
+  windSettings: settings.wind,
+  windShakeSettings: settings.wind.shake,
+  stormSettings: settings.storm,
+  postfxSettings: settings.postfx,
+  presets: settings.presets,
+  weatherGraphs: settings.weatherGraphs,
+  cloudFormations: CLOUD_FORMATIONS,
+  onPresetApplied: (preset) => {
+    if (gui) gui.controllersRecursive().forEach((c) => c.updateDisplay());
+    if (playerPanel) { playerPanel.setWeather(preset.label); playerPanel.setTemp(estimatedTempF()); }
+  },
+});
+const {
+  cloudParams, windParams, windShakeParams, stormParams, gust, rain, snow, windStreaks,
+} = weather;
 
 // --- Controls ---
 const controls = new OrbitControls(camera, renderer.domElement);
@@ -442,7 +468,6 @@ function computeBob(dt) {
 // what the Preetham sky model (very HDR-bright by construction) actually
 // needs — three.js's own Sky example pairs it with ~0.5, not 1.0.
 const skyParams = settings.sky;
-const cloudParams = settings.clouds; // formation: see clouds.js's CLOUD_FORMATIONS for the full list; levels: altitude bands, 1-3
 // How starry the night sky looks — density is how many of the fixed star
 // pool are drawn, brightness is their opacity ceiling. Both are dev-only
 // knobs (see the "Stars" GUI folder); stars themselves always fade in/out
@@ -454,36 +479,11 @@ const cloudParams = settings.clouds; // formation: see clouds.js's CLOUD_FORMATI
 // this default just picks a point on that wider range that reads as a
 // properly bright white point once the night tint is applied on top.
 const starParams = settings.stars;
-// windParams is the base/average the GUI controls; `gust` is the effective,
-// continuously-fluctuating value everything actually renders with — real
-// wind isn't constant, it surges, dies down, and swings direction over time.
-const windParams = settings.wind;
-const gust = { speed: windParams.speed, direction: windParams.direction };
-let gustPhase = 0;
-function updateGust(dt) {
-  gustPhase += dt;
-  // Mismatched, slow periods read as organic gusting rather than a fixed
-  // value or per-frame jitter — no RNG needed, just uncorrelated sines.
-  const speedWobble =
-    Math.sin(gustPhase * 0.09) * 0.5 +
-    Math.sin(gustPhase * 0.033 + 1.7) * 0.35 +
-    Math.sin(gustPhase * 0.021 + 4.1) * 0.25;
-  const dirWobble =
-    Math.sin(gustPhase * 0.015 + 2.3) * 0.6 +
-    Math.sin(gustPhase * 0.028 + 5.5) * 0.4;
-
-  const speedMultiplier = THREE.MathUtils.clamp(1 + speedWobble, 0.1, 1.8);
-  gust.speed = windParams.speed * speedMultiplier;
-  // Was *40 (up to ±40°) — barely noticeable at a calm preset's low speed,
-  // but the exact same swing at a windy preset's much higher speed made
-  // clouds/rain/streaks visibly change direction hard enough to read as
-  // "the wind direction just changed" during a weather transition, when
-  // really it was always doing this and speed just made it obvious. A much
-  // smaller swing keeps direction feeling stable across every preset.
-  gust.direction = windParams.direction + dirWobble * 12;
-}
-const windShakeParams = settings.wind.shake;
-const stormParams = settings.storm;
+// cloudParams/windParams/windShakeParams/stormParams/gust are all owned by
+// the weather subsystem now (see its construction above) — destructured
+// from `weather` there under these exact names so every reference below
+// (GUI folders, updateGodRays' cloud damping, the lighting/weather-grade
+// blend) keeps working unchanged.
 const fxParams = settings.postfx;
 
 // Sky.js's own cloud-color term gets multiplied by `vSunE * 0.00002` inside
@@ -508,34 +508,18 @@ const fxParams = settings.postfx;
 // separate lookup, same reasoning PRESET_TEMP_DELTA_F used to give for
 // *not* folding it in — with everything already namespaced under one
 // preset key, there's no separate lookup left to justify.
-const PRESETS = settings.presets;
-
-// { <preset's display label>: <preset's settings key> } — the shape
-// lil-gui wants for a dropdown (see the "Weather Preset" folder below),
-// same pattern as flightCurves.ts's curveOptions.
-function presetOptions() {
-  const options = {};
-  for (const [key, preset] of Object.entries(PRESETS)) options[preset.label] = key;
-  return options;
-}
-
-// Resolves free-form console input (either a preset's key or its display
-// label, case-insensitively — "Partly Cloudy" and "partlyCloudy" both
-// work) to its settings key, or undefined if nothing matches.
-function matchPresetName(raw) {
-  const needle = raw.toLowerCase();
-  const found = Object.entries(PRESETS).find(
-    ([key, preset]) => key.toLowerCase() === needle || preset.label.toLowerCase() === needle,
-  );
-  return found?.[0];
-}
+// PRESETS/presetOptions/matchPresetName/WEATHER_GRAPHS/pickWeatherFor/
+// applyPreset/updatePresetTransition/the auto-roll timer are all owned by
+// the weather subsystem now (see its construction above) — reached via
+// weather.* below instead of module-level names.
 
 // The panel's displayed temperature: a location's own rough baseline (see
 // settings.locations), nudged by whatever the sky is currently doing (see
-// each preset's own tempDeltaF) — an estimate for flavor, not a forecast.
+// weather.tempDeltaF, sourced from the current preset's own tempDeltaF) —
+// an estimate for flavor, not a forecast.
 function estimatedTempF() {
   const baseTempF = LOCATION_CONFIGS[currentLocationName]?.baseTempF ?? 60;
-  return baseTempF + (PRESETS[currentPresetName]?.tempDeltaF ?? 0);
+  return baseTempF + weather.tempDeltaF();
 }
 
 // There genuinely is no weather in space — but the panel reporting nothing
@@ -545,42 +529,7 @@ function estimatedTempF() {
 const SPACE_WEATHER_LABEL = 'Vacuum';
 const SPACE_TEMP_F = -200;
 
-// Weather as a directed graph, per location: each node's outgoing edges are
-// [presetKey, weight] pairs — where the sky can plausibly go next from
-// here, and how likely each option is relative to the others. This is what
-// actually produces "clear -> partly cloudy -> cloudy -> rain -> clearing ->
-// partly cloudy" style progressions instead of any preset being reachable
-// from any other. Palo Alto skews sunny and never sees snow; Urbana leans
-// colder/windier and routes through snow/heavySnow/blizzard instead of
-// rain. Falls Church and Chantilly don't have their own graphs yet —
-// pickWeatherFor below falls back to Palo Alto's for any location without
-// one, which is a reasonable enough default for both (mid-Atlantic, not
-// dramatically different from coastal California's mix). See
-// settings.toml's [weatherGraphs.*] tables for the actual data.
-const WEATHER_GRAPHS = settings.weatherGraphs;
-
-// Weighted walk along the current location's graph from wherever the
-// weather is now. If the current preset isn't a node in this location's
-// graph at all (e.g. it was set manually via the console to something this
-// location doesn't normally roll), fall back to an even pick across every
-// node in the graph rather than getting stuck.
-function pickWeatherFor(locationKey) {
-  const graph = WEATHER_GRAPHS[locationKey] || WEATHER_GRAPHS.paloAlto;
-  const edges = graph[currentPresetName];
-  const options = edges && edges.length
-    ? edges
-    : Object.keys(graph).filter((name) => name !== currentPresetName).map((name) => [name, 1]);
-  const total = options.reduce((sum, [, weight]) => sum + weight, 0);
-  let roll = Math.random() * total;
-  for (const [name, weight] of options) {
-    roll -= weight;
-    if (roll <= 0) return name;
-  }
-  return options[options.length - 1][0];
-}
-
 let playerPanel = null; // set once buildPlayerPanel runs; keeps the user-facing panel in sync
-let currentPresetName = 'clear';
 // Placeholder only — overwritten as soon as a real location is picked (see
 // the random startup pick near LOCATION_CONFIGS further down), before the
 // first frame ever renders.
@@ -608,135 +557,6 @@ let timeSpeed = TIME_SPEEDS[DEFAULT_SPEED_INDEX];
 // used (see `controls.update()` below and `simTime`).
 let timeFrozen = false;
 let navEnabledBeforeTimeFreeze = false;
-// Sim hours between automatic weather rolls, not real seconds — ties how
-// often weather changes to the world's own clock (including night running
-// 3x faster) instead of a real-world timer that kept rolling regardless of
-// how fast or slow time was actually passing, which is what made it feel
-// like it was changing too often.
-let weatherChangeIntervalHours = 10;
-let autoWeatherFrozen = false; // set from ":" console's "weather freeze"/"weather run"
-let autoWeatherTimer = weatherChangeIntervalHours;
-// A little randomness so rolls don't happen on an eerily exact metronome.
-function nextWeatherInterval() {
-  return weatherChangeIntervalHours * (0.8 + Math.random() * 0.4);
-}
-
-// Weather presets cross-fade rather than snap: capture where every affected
-// param currently sits, where the new preset wants it, and ease between the
-// two over a few seconds each frame (see updatePresetTransition). Rain/snow
-// specifically fade via `intensity` (particles/intensity.ts scales opacity
-// by it below 1), and get switched on immediately / off only once the fade-out
-// finishes, so the particles are actually visible while fading rather than
-// popping in/out at full or zero opacity.
-let presetTransition = null;
-// Matches clouds.js's SPAWN_GROW_SECONDS — every part of a weather change
-// (fog/wind/bloom/rain/snow crossfade here, cloud cluster grow-in/shrink-out
-// there) targets the same 10 seconds so a weather cycle reads as one
-// unified transition instead of some parts finishing well before others.
-const PRESET_TRANSITION_DURATION = 10;
-// The very first call (module init, always 'clear') has nothing real to
-// cross-fade *from* — "from" would just be particles/scene.js's raw
-// constructor defaults, which were never actually shown on screen. Cross-
-// fading from them anyway is exactly why rain (and to a lesser extent,
-// clouds) could briefly appear on load before settling to Clear: the
-// system was fading out a "rain" that only existed as an uninitialized
-// default, never as something actually rendered.
-let hasAppliedFirstPreset = false;
-
-function applyPreset(name) {
-  currentPresetName = name;
-  const p = PRESETS[name];
-  const targetRainEnabled = p.rain;
-  const targetSnowEnabled = p.snow;
-
-  if (!hasAppliedFirstPreset) {
-    hasAppliedFirstPreset = true;
-    cloudParams.coverage = p.coverage;
-    cloudParams.density = p.density;
-    fog.near = p.fogNear;
-    fog.far = p.fogFar;
-    windParams.speed = p.wind;
-    fxParams.bloomStrength = p.bloom;
-    fxParams.godRayStrength = p.godray;
-    rain.params.enabled = targetRainEnabled;
-    rain.params.intensity = targetRainEnabled ? (p.rainIntensity ?? 1) : 0;
-    snow.params.enabled = targetSnowEnabled;
-    snow.params.intensity = targetSnowEnabled ? (p.snowIntensity ?? 1) : 0;
-    stormParams.enabled = p.storm;
-    cloudParams.formation = p.cloudFormation;
-    cloudParams.levels = p.cloudLevels;
-    if (gui) gui.controllersRecursive().forEach((c) => c.updateDisplay());
-    if (playerPanel) { playerPanel.setWeather(p.label); playerPanel.setTemp(estimatedTempF()); }
-    return;
-  }
-
-  presetTransition = {
-    t: 0,
-    from: {
-      coverage: cloudParams.coverage,
-      density: cloudParams.density,
-      fogNear: fog.near,
-      fogFar: fog.far,
-      windSpeed: windParams.speed,
-      bloomStrength: fxParams.bloomStrength,
-      godRayStrength: fxParams.godRayStrength,
-      rainIntensity: rain.params.enabled ? rain.params.intensity : 0,
-      snowIntensity: snow.params.enabled ? snow.params.intensity : 0,
-    },
-    to: {
-      coverage: p.coverage,
-      density: p.density,
-      fogNear: p.fogNear,
-      fogFar: p.fogFar,
-      windSpeed: p.wind,
-      bloomStrength: p.bloom,
-      godRayStrength: p.godray,
-      rainIntensity: targetRainEnabled ? (p.rainIntensity ?? 1) : 0,
-      snowIntensity: targetSnowEnabled ? (p.snowIntensity ?? 1) : 0,
-    },
-    targetRainEnabled,
-    targetSnowEnabled,
-  };
-
-  if (targetRainEnabled) rain.params.enabled = true;
-  if (targetSnowEnabled) snow.params.enabled = true;
-  // Lightning is an occasional event/accent, not a continuous base visual —
-  // nothing to usefully cross-fade, so this just switches on/off directly.
-  stormParams.enabled = p.storm;
-  // Also set directly, not cross-faded — a discrete "personality" swap
-  // isn't something that can be smoothly interpolated the way a number
-  // can. New shapes only actually roll out gradually anyway, as clusters
-  // naturally drift out and respawn with the new formation — see clouds.js.
-  cloudParams.formation = p.cloudFormation;
-  cloudParams.levels = p.cloudLevels;
-
-  if (gui) gui.controllersRecursive().forEach((c) => c.updateDisplay());
-  if (playerPanel) { playerPanel.setWeather(p.label); playerPanel.setTemp(estimatedTempF()); }
-}
-
-function updatePresetTransition(dt) {
-  if (!presetTransition) return;
-  presetTransition.t += dt;
-  const raw = Math.min(presetTransition.t / PRESET_TRANSITION_DURATION, 1);
-  const k = raw * raw * (3 - 2 * raw); // smoothstep ease
-  const { from, to } = presetTransition;
-
-  cloudParams.coverage = THREE.MathUtils.lerp(from.coverage, to.coverage, k);
-  cloudParams.density = THREE.MathUtils.lerp(from.density, to.density, k);
-  fog.near = THREE.MathUtils.lerp(from.fogNear, to.fogNear, k);
-  fog.far = THREE.MathUtils.lerp(from.fogFar, to.fogFar, k);
-  windParams.speed = THREE.MathUtils.lerp(from.windSpeed, to.windSpeed, k);
-  fxParams.bloomStrength = THREE.MathUtils.lerp(from.bloomStrength, to.bloomStrength, k);
-  fxParams.godRayStrength = THREE.MathUtils.lerp(from.godRayStrength, to.godRayStrength, k);
-  rain.params.intensity = THREE.MathUtils.lerp(from.rainIntensity, to.rainIntensity, k);
-  snow.params.intensity = THREE.MathUtils.lerp(from.snowIntensity, to.snowIntensity, k);
-
-  if (raw >= 1) {
-    rain.params.enabled = presetTransition.targetRainEnabled;
-    snow.params.enabled = presetTransition.targetSnowEnabled;
-    presetTransition = null;
-  }
-}
 
 // --- GUI --- toggled via the hidden ":" console (see the "settings menu"
 // command below), not a visible button — one less thing cluttering the
@@ -809,7 +629,7 @@ async function buildDevGui() {
   }, 'copySettings').name('Copy All Settings');
 
   const weatherFolder = gui.addFolder('Weather Preset');
-  weatherFolder.add({ preset: 'clear' }, 'preset', presetOptions()).name('preset').onChange(applyPreset);
+  weatherFolder.add({ preset: 'clear' }, 'preset', weather.presetOptions()).name('preset').onChange(weather.applyPreset);
 
   const skyFolder = gui.addFolder('Sky & Time');
   skyFolder.add(skyParams, 'hour', 0, 24, 0.05).name('time of day');
@@ -1022,7 +842,7 @@ async function buildDevGui() {
 // via the ":" console's "controls" command.
 let navEnabled = false;
 
-applyPreset('clear');
+weather.applyPreset('clear');
 
 // --- Locations --- one source of truth for each place's lat/lon and saved
 // camera pose, shared by the globe overview's markers, the background
@@ -1144,8 +964,8 @@ function onArriveAt(name, { push = true } = {}) {
   const cfg = LOCATION_CONFIGS[name];
   clouds.recenter(cfg.position);
   currentLocationName = name;
-  applyPreset(pickWeatherFor(currentLocationName));
-  autoWeatherTimer = nextWeatherInterval();
+  weather.applyPreset(weather.pickNextPreset(currentLocationName));
+  weather.resetAutoRollTimer();
   // Every arrival lands in local view, whichever path got it here — a
   // deep link straight to a location (see syncToPath) never goes through
   // leaveOverview(), which is otherwise the only place this normally gets
@@ -1204,7 +1024,7 @@ function matchLocationName(raw) {
 // space — see updatePlayerPanelStatus), plus how fast time passes. No
 // location picker — traveling is a console command (see commands/travelCommand.ts).
 playerPanel = buildPlayerPanel({
-  initialWeather: PRESETS[currentPresetName].label,
+  initialWeather: weather.presetLabel(weather.getCurrentPresetName()),
   initialTempF: estimatedTempF(),
   initialHour: skyParams.hour,
   initialTimeLabel: 'Local Time',
@@ -1468,31 +1288,20 @@ const clockControl = {
 };
 
 const weatherControl = {
-  matchPreset: matchPresetName,
-  presetLabel: (key) => PRESETS[key].label,
-  presetLabels: () => Object.values(PRESETS).map((p) => p.label),
-  applyPreset,
-  currentPresetLabel: () => PRESETS[currentPresetName].label,
-  setChangeIntervalHours: (hours) => { weatherChangeIntervalHours = hours; },
-  freezeAuto: () => { autoWeatherFrozen = true; },
-  runAuto: () => { autoWeatherFrozen = false; autoWeatherTimer = nextWeatherInterval(); },
-  graphInfo: () => {
-    const graph = WEATHER_GRAPHS[currentLocationName] || WEATHER_GRAPHS.paloAlto;
-    const edges = graph[currentPresetName];
-    const locationLabel = LOCATION_CONFIGS[currentLocationName].label;
-    const presetLabel = PRESETS[currentPresetName].label;
-    if (!edges) return `${locationLabel}: "${presetLabel}" has no graph edges — next roll picks evenly from every node`;
-    const total = edges.reduce((sum, [, weight]) => sum + weight, 0);
-    const options = edges
-      .map(([name, weight]) => `${PRESETS[name].label} ${Math.round((weight / total) * 100)}%`)
-      .join(', ');
-    return `${locationLabel}: ${presetLabel} -> ${options}`;
-  },
-  cloudFormations: () => CLOUD_FORMATIONS,
-  setCloudCoverage: (v) => { cloudParams.coverage = v; },
-  setCloudDensity: (v) => { cloudParams.density = v; },
-  setCloudLevels: (v) => { cloudParams.levels = v; },
-  setCloudFormation: (v) => { cloudParams.formation = v; },
+  matchPreset: weather.matchPresetName,
+  presetLabel: weather.presetLabel,
+  presetLabels: weather.presetLabels,
+  applyPreset: weather.applyPreset,
+  currentPresetLabel: () => weather.presetLabel(weather.getCurrentPresetName()),
+  setChangeIntervalHours: weather.setChangeIntervalHours,
+  freezeAuto: weather.freezeAuto,
+  runAuto: weather.runAuto,
+  graphInfo: () => weather.graphSummary(currentLocationName, LOCATION_CONFIGS[currentLocationName].label),
+  cloudFormations: weather.cloudFormations,
+  setCloudCoverage: weather.setCloudCoverage,
+  setCloudDensity: weather.setCloudDensity,
+  setCloudLevels: weather.setCloudLevels,
+  setCloudFormation: weather.setCloudFormation,
 };
 
 const starsControl = {
@@ -1524,7 +1333,7 @@ const controlsToggle = {
 
 const debugSnapshot = {
   snapshot: () => ({
-    hour: skyParams.hour, timeSpeed, currentLocationName, currentPresetName,
+    hour: skyParams.hour, timeSpeed, currentLocationName, currentPresetName: weather.getCurrentPresetName(),
     starOpacity: sky.stars.material.opacity,
     starDrawRange: sky.stars.geometry.drawRange,
     sunOpacity: sky.sunSprite.material.opacity,
@@ -1804,31 +1613,9 @@ function updateGodRays(sunDir) {
   });
 }
 
-// Directional streak blur along the wind's screen-projected direction —
-// only kicks in once wind is genuinely strong (calm/breezy days stay crisp).
-const windBlurWorldDir = new THREE.Vector3();
-const windBlurP1 = new THREE.Vector3();
-const windBlurP2 = new THREE.Vector3();
-function updateWindBlur() {
-  const windRad = gust.direction * (Math.PI / 180);
-  windBlurWorldDir.set(Math.cos(windRad), 0, Math.sin(windRad));
-  windBlurP1.copy(camera.position).project(camera);
-  windBlurP2.copy(camera.position).addScaledVector(windBlurWorldDir, 60).project(camera);
-
-  let dx = windBlurP2.x - windBlurP1.x;
-  let dy = windBlurP2.y - windBlurP1.y;
-  const len = Math.hypot(dx, dy) || 1;
-  dx /= len;
-  dy /= len;
-
-  // Only the sharpest gust peaks should trigger this at all — it reads as
-  // generic blur, not "wind," if it's on any more often than that.
-  const windAmount = THREE.MathUtils.clamp((gust.speed - 45) / 40, 0, 1);
-  const strength = windAmount * windParams.streakBlur;
-  // Most days never cross the gust threshold at all — skip the pass's draw
-  // entirely rather than running it every frame to blend in zero.
-  postFx.windBlur.set({ direction: [dx, dy], strength });
-}
+// Directional wind-driven streak blur is owned by the weather subsystem
+// now (see weather/windBlur.ts) — reached via weather.updateWindBlur()
+// below.
 
 // Radial blur toward screen center — sells the speed of the overview's own
 // zoom-in and the local-view descend that continues it, and doubles as
@@ -1870,94 +1657,9 @@ function updateZoomBlur() {
   postFx.zoomBlur.set({ strength: strength * fxParams.zoomBlurStrength });
 }
 
-// How rough the current weather is, 0..1 — combines wind, rain, and snow
-// rather than just wind, so a heavy downpour or blizzard buffets the camera
-// even on days that aren't specifically windy. Read by both the shake and
-// the FOV response below so they stay in lockstep with each other.
-function precipitationAmounts() {
-  const rainAmount = rain.params.enabled ? THREE.MathUtils.clamp(rain.params.intensity / RAIN_MAX_INTENSITY, 0, 1) : 0;
-  const snowAmount = snow.params.enabled ? THREE.MathUtils.clamp(snow.params.intensity / SNOW_MAX_INTENSITY, 0, 1) : 0;
-  return { rainAmount, snowAmount };
-}
-
-function weatherIntensity() {
-  const windAmount = THREE.MathUtils.clamp((gust.speed - 10) / 70, 0, 1);
-  const { rainAmount, snowAmount } = precipitationAmounts();
-  return Math.max(windAmount, rainAmount * 0.7, snowAmount * 0.6);
-}
-
-// Subtle camera buffeting in rough weather — sum of a few uncorrelated sine
-// waves reads as irregular gusting rather than a mechanical single-frequency
-// wobble. Kept slow/gentle on purpose: it layers on top of the movement bob
-// (a separate, independently-timed effect) and shouldn't read as the bob
-// itself speeding up. Render-pose only, like the bob, so it never accumulates.
-let windShakeTime = 0;
-const windShakeOffset = new THREE.Vector3();
-function computeWindShake(dt, intensity) {
-  windShakeOffset.set(0, 0, 0);
-  if (!windShakeParams.enabled || intensity <= 0) return windShakeOffset;
-
-  windShakeTime += dt;
-  const amp = intensity * windShakeParams.amount;
-  windShakeOffset.x = (Math.sin(windShakeTime * 1.7) + Math.sin(windShakeTime * 0.9) * 0.5) * amp * 0.5;
-  windShakeOffset.y = (Math.sin(windShakeTime * 2.3) + Math.sin(windShakeTime * 1.1) * 0.5) * amp * 0.35;
-  windShakeOffset.z = (Math.sin(windShakeTime * 1.3) + Math.sin(windShakeTime * 0.7) * 0.5) * amp * 0.5;
-  return windShakeOffset;
-}
-
-// A slight widening of the field of view in rough weather — reads as the
-// camera bracing/being buffeted, the same instinct as flinching wider-eyed
-// in a gale — plus a quick, sharp kick synced to each lightning flash (a
-// thunder-jolt reflex), decaying back to the weather-driven baseline rather
-// than the fixed base FOV so it doesn't fight the ambient widening.
-const BASE_FOV = 60;
-let fovKick = 0;
-function computeFov(dt, intensity) {
-  const ambientWiden = intensity * 2.5;
-  fovKick = Math.max(fovKick * Math.pow(0.001, dt), flash * 4);
-  return BASE_FOV + ambientWiden + fovKick;
-}
-
-// `flash` is normalized 0..1 and drives the actual visible effects (a real
-// screen-wide brightening plus a bloom bump); the PointLight alone was
-// nearly invisible since it sat at a fixed world position that's rarely
-// anywhere near the camera/visible geometry, so it's now just a minor local
-// accent that follows the camera instead of the main effect.
-let lightningTimer = 3 + Math.random() * 4;
-let flash = 0;
-// A real strike is a stutter of 2-4 quick flickers (the main stroke plus a
-// couple of dimmer restrikes a beat later), not one smooth fade — scheduling
-// a short burst of pending flash-bumps sells that far better than a single
-// decay ever could.
-let pendingFlashes = [];
-function updateLightning(dt) {
-  if (stormParams.enabled) {
-    lightningTimer -= dt;
-    if (lightningTimer <= 0) {
-      const strikeCount = 2 + Math.floor(Math.random() * 3);
-      pendingFlashes = [];
-      let t = 0;
-      for (let i = 0; i < strikeCount; i++) {
-        t += 0.03 + Math.random() * 0.12;
-        pendingFlashes.push({ time: t, peak: i === 0 ? 1 : 0.4 + Math.random() * 0.5 });
-      }
-      lightningTimer = 4 + Math.random() * 8;
-    }
-  }
-
-  for (let i = pendingFlashes.length - 1; i >= 0; i--) {
-    pendingFlashes[i].time -= dt;
-    if (pendingFlashes[i].time <= 0) {
-      flash = Math.max(flash, pendingFlashes[i].peak);
-      pendingFlashes.splice(i, 1);
-    }
-  }
-
-  flash *= Math.pow(0.0005, dt);
-  lightning.position.set(camera.position.x, camera.position.y + 500, camera.position.z - 200);
-  lightning.intensity = flash * 20;
-  postFx.weatherGrade.set({ flash: flash * 0.6 });
-}
+// precipitationAmounts/weatherIntensity/computeWindShake/computeFov/
+// updateLightning are all owned by the weather subsystem now — reached via
+// weather.* below.
 
 function updatePostFX(nightAmount) {
   postFx.setExposure(fxParams.exposure);
@@ -1971,7 +1673,7 @@ function updatePostFX(nightAmount) {
   // looking at the globe from space.
   const effectiveNightAmount = overviewActive ? 0 : nightAmount;
   postFx.bloom.set({
-    strength: fxParams.bloomStrength + flash * 1.2 + effectiveNightAmount * 0.9,
+    strength: fxParams.bloomStrength + weather.getFlash() * 1.2 + effectiveNightAmount * 0.9,
     radius: fxParams.bloomRadius + effectiveNightAmount * 1.8,
     threshold: fxParams.bloomThreshold,
   });
@@ -2018,7 +1720,7 @@ function tick() {
   // exactly the "ground moves, pins don't" symptom, worsening the longer
   // WASD was held, independent of anything zoom-related.
   if (!updateFlight(dt) && !overviewActive) applyMovement(dt);
-  updateGust(dt);
+  weather.updateGust(dt);
 
   const hourSpeed = timeSpeed * (isDeepNight(skyParams.hour) ? DEEP_NIGHT_SPEED_MULTIPLIER : 1);
   skyParams.hour = (skyParams.hour + hourSpeed * dt) % 24;
@@ -2036,74 +1738,56 @@ function tick() {
     }
   }
 
-  if (!autoWeatherFrozen) {
-    autoWeatherTimer -= hourSpeed * dt; // sim hours, not real seconds — see weatherChangeIntervalHours
-    if (autoWeatherTimer <= 0) {
-      applyPreset(pickWeatherFor(currentLocationName));
-      autoWeatherTimer = nextWeatherInterval();
-    }
+  // sim hours, not real seconds — ties how often weather changes to the
+  // world's own clock (including night running faster) instead of a real-
+  // world timer that kept rolling regardless of how fast or slow time was
+  // actually passing.
+  if (weather.tickAutoRoll(hourSpeed * dt)) {
+    weather.applyPreset(weather.pickNextPreset(currentLocationName));
   }
-  updatePresetTransition(dt);
+  weather.updatePresetTransition(dt);
 
-  rain.params.windSpeed = gust.speed;
-  rain.params.windDirection = gust.direction;
-  snow.params.windSpeed = gust.speed * 0.3;
-  snow.params.windDirection = gust.direction;
-  windStreaks.params.windSpeed = gust.speed;
-  windStreaks.params.windDirection = gust.direction;
   // setLocalViewVisible(false) sets rain.object/snow.object/windStreaks.object
   // .visible = false the instant the overview opens — but each system's own
   // update() unconditionally does `object.visible = params.enabled` (or
   // `windSpeed > minVisibleWindSpeed`) as its very first line (see
-  // src/particles/), and
-  // params.enabled can still be true for as long as PRESET_TRANSITION_
-  // DURATION (10s) after a weather roll starts moving away from rain/snow —
-  // applyPreset only flips it false at the *end* of that cross-fade. Left
-  // ungated, the next call to .update() (every frame, unconditionally)
-  // stomped straight back over what setLocalViewVisible just set, and kept
-  // simulating/respawning particles using camera.position — now Earth-scale
-  // globe coordinates instead of local ones — scattering them across
-  // literally the whole visible sky. Not updating at all while in the
-  // overview is what actually makes it stick, immediately, the same way
+  // src/particles/), and params.enabled can still be true for as long as
+  // the preset transition duration after a weather roll starts moving away
+  // from rain/snow — applyPreset only flips it false at the *end* of that
+  // cross-fade. Left ungated, the next call to .update() (every frame,
+  // unconditionally) stomped straight back over what setLocalViewVisible
+  // just set, and kept simulating/respawning particles using
+  // camera.position — now Earth-scale globe coordinates instead of local
+  // ones — scattering them across literally the whole visible sky. Passing
+  // `!overviewActive` as weather.updateParticles' `active` flag is what
+  // actually makes it stick, immediately, the same way
   // applyMovement/controls.update() are already skipped there.
-  if (!overviewActive) {
-    rain.update(dt, camera.position);
-    snow.update(dt, camera.position);
-    windStreaks.update(dt, camera.position);
-  }
+  weather.updateParticles(dt, camera.position, !overviewActive);
 
   const sunDir = updateLighting();
   updateGodRays(sunDir);
-  updateWindBlur();
+  weather.updateWindBlur();
   updateZoomBlur();
   preloadManager.update();
-  updateLightning(dt);
-  const { rainAmount, snowAmount } = precipitationAmounts();
+  weather.updateLightning(dt, camera.position);
   // Same curve updateLighting() uses internally for the moon/night light
   // floor — recomputed here since that's a local inside updateLighting(),
   // not something it currently returns.
   const nightAmount = THREE.MathUtils.clamp(-sunDir.y * 5, 0, 1);
+  // windSpeed/windDirection/coverage/density/formation/levels/rainAmount/
+  // snowAmount/stormAmount/flash all come from the weather subsystem
+  // (see cloudUpdateParams' own comment on why darkening/tinting keys off
+  // actual precipitation, not coverage or wind); dt/simTime/cameraPosition/
+  // sunColor/ambientColor/nightAmount are this frame's lighting context,
+  // which clouds isn't part of the weather subsystem's own concerns.
   clouds.update({
+    ...weather.cloudUpdateParams(),
     dt,
     simTime,
     cameraPosition: camera.position,
-    windSpeed: gust.speed,
-    windDirection: gust.direction,
     sunColor: sun.color,
     ambientColor: frameTint,
     nightAmount,
-    coverage: cloudParams.coverage,
-    density: cloudParams.density,
-    formation: cloudParams.formation,
-    levels: cloudParams.levels,
-    // Darkening/tinting is tied to actual precipitation, not coverage or
-    // wind — an overcast-but-dry "Cloudy" day still reads as bright white
-    // clouds — and each kind gets its own color rather than one generic
-    // "storm" grey: rain, snow, and a thunderhead don't actually look alike.
-    rainAmount,
-    snowAmount,
-    stormAmount: stormParams.enabled ? 1 : 0,
-    flash,
   });
   updatePostFX(nightAmount);
 
@@ -2149,9 +1833,9 @@ function tick() {
   if (overviewActive) {
     renderOffset.set(0, 0, 0);
   } else {
-    const intensity = weatherIntensity();
-    renderOffset.copy(computeBob(dt)).add(computeWindShake(dt, intensity));
-    camera.fov = computeFov(dt, intensity);
+    const intensity = weather.weatherIntensity();
+    renderOffset.copy(computeBob(dt)).add(weather.computeWindShake(dt, intensity));
+    camera.fov = weather.computeFov(dt, intensity);
     camera.updateProjectionMatrix();
   }
   camera.position.add(renderOffset);
