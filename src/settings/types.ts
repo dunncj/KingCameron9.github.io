@@ -82,9 +82,27 @@ export interface CameraBobSettings {
   idleAmount: number;
 }
 
+// Tunables for the local view's wheel-driven dolly-zoom (see
+// camera/localCameraControl.ts and camera/scrollVelocity.ts) — separate
+// from camera.move (WASD) since it's a fundamentally different input
+// (impulse + decay, not held-key/frame-rate driven) and is always active
+// regardless of whether WASD/drag nav is toggled on.
+export interface CameraScrollSettings {
+  sensitivity: number;
+  damping: number;
+  maxSpeed: number;
+  minDistance: number;
+  maxDistance: number;
+  // How far past maxDistance (same units as distance) the wheel has to
+  // keep pulling, accumulated across frames, before scrolling out hands
+  // off to the globe overview — the "scroll past the edge" escape hatch.
+  exitOverscroll: number;
+}
+
 export interface CameraSettings {
   move: CameraMoveSettings;
   bob: CameraBobSettings;
+  scroll: CameraScrollSettings;
 }
 
 export interface HandoffSettings {

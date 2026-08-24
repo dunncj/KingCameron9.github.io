@@ -5,6 +5,7 @@ import {
 import { getMovementCurve } from './flightCurves';
 import { settings } from './settings/store';
 import { patchShaderSource } from './shaders';
+import { createScrollVelocity } from './camera/scrollVelocity';
 
 // The landing experience: one continuous 3D camera, never a hard cut to a
 // separate renderer. Mounts a live, pixelated satellite-imagery patch onto
@@ -1182,6 +1183,39 @@ export function mountUSOverview({
   const WHEEL_ZOOM_IN_SENSITIVITY = 0.0005;
   const WHEEL_ZOOM_OUT_SENSITIVITY = 0.0022;
 
+  // Same "flick and glide" primitive the local ground view's dolly-zoom
+  // uses (see camera/scrollVelocity.ts) — one wheel flick keeps easing for
+  // a beat instead of the zoom level snapping exactly to each raw event's
+  // deltaY. The in/out sensitivity asymmetry (see the comment this used to
+  // sit next to) is applied before the impulse goes in, so the shared
+  // primitive itself stays direction-agnostic — sensitivity here is 1, a
+  // pure passthrough.
+  const zoomVelocity = createScrollVelocity({ sensitivity: 1, damping: 7, maxSpeed: 0.08 });
+  let zoomRaf = null;
+
+  function stepZoomVelocity() {
+    let lastT = performance.now();
+    const step = () => {
+      const now = performance.now();
+      const dt = Math.min(0.048, (now - lastT) / 1000);
+      lastT = now;
+      const applied = zoomVelocity.update(dt);
+      zoom = Math.min(maxZoom, Math.max(minZoom, zoom - applied));
+      applyCamera();
+      ensureGrid();
+      zoomRaf = (!flying && applied !== 0) ? requestAnimationFrame(step) : null;
+    };
+    zoomRaf = requestAnimationFrame(step);
+  }
+
+  function stopZoomVelocity() {
+    if (zoomRaf) {
+      cancelAnimationFrame(zoomRaf);
+      zoomRaf = null;
+    }
+    zoomVelocity.reset();
+  }
+
   function onWheel(e) {
     if (flying) return;
     e.preventDefault();
@@ -1196,9 +1230,8 @@ export function mountUSOverview({
     // exactly what it looks like: dollying in/out on a fixed point, with
     // zero possibility of drift regardless of how long you scroll.
     const sensitivity = e.deltaY < 0 ? WHEEL_ZOOM_IN_SENSITIVITY : WHEEL_ZOOM_OUT_SENSITIVITY;
-    zoom = Math.min(maxZoom, Math.max(minZoom, zoom - e.deltaY * sensitivity));
-    applyCamera();
-    ensureGrid();
+    zoomVelocity.addImpulse(e.deltaY * sensitivity);
+    if (zoomRaf === null) stepZoomVelocity();
   }
 
   let dragging = false;
@@ -1214,6 +1247,7 @@ export function mountUSOverview({
   const MOMENTUM_MIN_SPEED = 0.0002; // deg/ms — below this, just stop
 
   function stopMomentum() {
+    stopZoomVelocity(); // pan-throw and zoom-glide always start/stop together
     if (momentumRaf) {
       cancelAnimationFrame(momentumRaf);
       momentumRaf = null;
@@ -1309,7 +1343,14 @@ export function mountUSOverview({
 
   const prevCursor = renderer.domElement.style.cursor;
   renderer.domElement.style.cursor = 'grab';
-  renderer.domElement.addEventListener('wheel', onWheel, { passive: false });
+  // domParent, not renderer.domElement: the marker <div>s (see buildMarker)
+  // are siblings of the canvas under domParent, not descendants of it, so a
+  // listener scoped to the canvas alone never sees a wheel event whose
+  // target is a marker the cursor happens to be over — wheel events only
+  // bubble up their own ancestor chain, never sideways into a sibling.
+  // Scoping to domParent instead covers both without changing anything
+  // about how the event itself is handled.
+  domParent.addEventListener('wheel', onWheel, { passive: false });
   renderer.domElement.addEventListener('mousedown', onPointerDown);
   window.addEventListener('mousemove', onPointerMove);
   window.addEventListener('mousemove', onHoverCheck);
@@ -1484,7 +1525,7 @@ export function mountUSOverview({
     window.removeEventListener('mouseup', onPointerUp);
     window.removeEventListener('resize', resize);
     window.removeEventListener('keydown', onCenterDotKeyDown);
-    renderer.domElement.removeEventListener('wheel', onWheel);
+    domParent.removeEventListener('wheel', onWheel);
     renderer.domElement.removeEventListener('mousedown', onPointerDown);
     renderer.domElement.style.cursor = prevCursor;
     markers.forEach((m) => m.el.remove());

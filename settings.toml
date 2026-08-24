@@ -69,6 +69,14 @@ periodSeconds = 20
 amount = 6
 idleAmount = 1.4
 
+[camera.scroll]
+sensitivity = 2.2
+damping = 6
+maxSpeed = 1500
+minDistance = 50
+maxDistance = 3000
+exitOverscroll = 400
+
 [transitions.handoff]
 startHeight = 500
 descendDuration = 1.2

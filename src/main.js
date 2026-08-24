@@ -8,6 +8,7 @@ import { createPostFxService } from './postprocessing';
 import { createWeatherSystem } from './weather';
 import { buildPlayerPanel } from './player.js';
 import { buildDevConsole } from './devconsole';
+import { createLocalCameraControl } from './camera/localCameraControl';
 import {
   mountUSOverview, TILT_RAD, flyInParams, overviewFlightState, destPrefetchParams, hoverParams,
 } from './usMap.js';
@@ -182,45 +183,38 @@ const {
 // --- Controls ---
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
-controls.minDistance = 50;
-controls.maxDistance = 50000;
+// Wheel/scroll-zoom is fully owned by localCameraControl below (its own
+// listener, its own velocity+momentum, its own exit-to-overview threshold)
+// so it works the same way regardless of whether WASD/drag nav is toggled
+// on — disabling OrbitControls' own built-in wheel-zoom here keeps exactly
+// one thing driving camera distance instead of two fighting over it.
+controls.enableZoom = false;
+controls.minDistance = settings.camera.scroll.minDistance;
+controls.maxDistance = settings.camera.scroll.maxDistance;
 // OrbitControls always re-orients the camera toward its own target on the
 // first update() — matching that to where camera.lookAt() already pointed,
 // otherwise the target's default (0,0,0) silently overrides it.
 controls.target.copy(PALO_ALTO_VIEW.target);
 controls.enabled = false; // mouse/touch nav off by default — toggled by the "Controls" button
 
-// --- WASD/QE fly movement (pans camera + orbit target together) ---
-const moveParams = settings.camera.move; // speed in meters/sec
-const KEY_MAP = {
-  KeyW: 'forward', KeyS: 'back', KeyA: 'left', KeyD: 'right',
-  KeyE: 'up', KeyQ: 'down', Space: 'up', ShiftLeft: 'down',
-};
-const held = new Set();
-window.addEventListener('keydown', (e) => { if (navEnabled && KEY_MAP[e.code]) held.add(KEY_MAP[e.code]); });
-window.addEventListener('keyup', (e) => { if (KEY_MAP[e.code]) held.delete(KEY_MAP[e.code]); });
-
-const moveForward = new THREE.Vector3();
-const moveRight = new THREE.Vector3();
-function applyMovement(dt) {
-  if (held.size === 0) return;
-  const speed = moveParams.speed * dt;
-  camera.getWorldDirection(moveForward);
-  moveForward.y = 0;
-  moveForward.normalize();
-  moveRight.crossVectors(moveForward, camera.up).normalize();
-
-  const delta = new THREE.Vector3();
-  if (held.has('forward')) delta.addScaledVector(moveForward, speed);
-  if (held.has('back')) delta.addScaledVector(moveForward, -speed);
-  if (held.has('right')) delta.addScaledVector(moveRight, speed);
-  if (held.has('left')) delta.addScaledVector(moveRight, -speed);
-  if (held.has('up')) delta.y += speed;
-  if (held.has('down')) delta.y -= speed;
-
-  camera.position.add(delta);
-  controls.target.add(delta);
-}
+// --- Local view camera control (WASD fly movement + wheel dolly-zoom) ---
+// See camera/localCameraControl.ts: composition-first, owns everything that
+// turns raw ground-view input into camera motion. WASD stays gated behind
+// the "controls" toggle (isNavEnabled) same as always; wheel-zoom is not —
+// it's meant to always work, the same way page-scroll always works.
+// isLocalViewActive/onExitToOverview both close over `flight`/
+// `overviewActive`/`startZoomOutToOverview`, all declared further down this
+// module — safe here because none of these closures actually run until a
+// real event fires, well after the whole module has finished evaluating.
+const localCameraControl = createLocalCameraControl({
+  camera,
+  controls,
+  moveParams: settings.camera.move,
+  scrollParams: settings.camera.scroll,
+  isNavEnabled: () => navEnabled,
+  isLocalViewActive: () => !flight && !overviewActive,
+  onExitToOverview: () => startZoomOutToOverview(),
+});
 
 // --- Smooth "quick travel" (Google-Maps-style, not a cut) ---
 // A lat/lon re-center is a single-frame world swap — nothing to interpolate
@@ -277,7 +271,7 @@ const handoffParams = settings.transitions.handoff;
 
 const travelFacing = new THREE.Vector3();
 function travelTo(lat, lon, position, target, opts = {}) {
-  held.clear();
+  localCameraControl.clearHeldKeys();
   bobEase = 0;
 
   // Coming straight from the globe overview, which already ends its own
@@ -372,7 +366,7 @@ function travelTo(lat, lon, position, target, opts = {}) {
 
 function updateFlight(dt) {
   if (!flight) return false;
-  if (held.size > 0) { flight = null; return false; } // user input cancels the auto-travel
+  if (localCameraControl.isMoving()) { flight = null; return false; } // user input cancels the auto-travel
 
   if (flight.phase === 'ascendToSpace') {
     flight.t += dt;
@@ -427,7 +421,7 @@ function computeBob(dt) {
   bobOffset.set(0, 0, 0);
   if (!bobParams.enabled) return bobOffset;
 
-  const moving = held.size > 0;
+  const moving = localCameraControl.isMoving();
   const target = moving ? 1 : 0;
   bobEase += (target - bobEase) * Math.min(dt * 6, 1);
   const angularSpeed = (Math.PI * 2) / Math.max(bobParams.periodSeconds, 0.05);
@@ -854,12 +848,19 @@ async function buildDevGui() {
 
   // --- Movement speed ---
   const moveFolder = gui.addFolder('Movement');
-  moveFolder.add(moveParams, 'speed', 10, 3000, 10).name('speed (m/s)');
+  moveFolder.add(settings.camera.move, 'speed', 10, 3000, 10).name('speed (m/s)');
   moveFolder.add(bobParams, 'enabled').name('camera bob');
   moveFolder.add(bobParams, 'pattern', BOB_PATTERNS).name('bob pattern');
   moveFolder.add(bobParams, 'periodSeconds', 0.5, 60, 0.1).name('bob speed (s/cycle)');
   moveFolder.add(bobParams, 'amount', 0, 15, 0.5).name('bob amount');
   moveFolder.add(bobParams, 'idleAmount', 0, 6, 0.2).name('idle bob amount');
+
+  const scrollFolder = gui.addFolder('Scroll Zoom');
+  const scrollParams = settings.camera.scroll;
+  scrollFolder.add(scrollParams, 'sensitivity', 0.1, 10, 0.1).name('sensitivity');
+  scrollFolder.add(scrollParams, 'damping', 0.5, 20, 0.5).name('damping');
+  scrollFolder.add(scrollParams, 'maxSpeed', 200, 20000, 100).name('max speed');
+  scrollFolder.add(scrollParams, 'exitOverscroll', 200, 10000, 100).name('exit-to-earth overscroll');
 
   gui.controllersRecursive().forEach((c) => c.updateDisplay());
 }
@@ -1207,7 +1208,7 @@ function startZoomOutToOverview() {
     startHeight,
     groundPoint.z - lookDir.z * startHeight * Math.tan(TILT_RAD),
   );
-  held.clear();
+  localCameraControl.clearHeldKeys();
   bobEase = 0;
   flight = {
     phase: 'ascendToSpace',
@@ -1236,7 +1237,7 @@ function enterOverview(seed, { push = true } = {}) {
   // leaking the old one under a second, freshly-mounted overview.
   if (overview) { overview.dispose(); overview = null; }
   flight = null;
-  held.clear();
+  localCameraControl.clearHeldKeys();
   backToEarthBtn.style.display = 'none';
   overviewActive = true;
   setLocalViewVisible(false);
@@ -1353,7 +1354,7 @@ const clockControl = {
     navEnabledBeforeTimeFreeze = navEnabled;
     navEnabled = false;
     controls.enabled = false;
-    held.clear();
+    localCameraControl.clearHeldKeys();
   },
   run: () => {
     timeFrozen = false;
@@ -1407,7 +1408,7 @@ const controlsToggle = {
   toggle: () => {
     navEnabled = !navEnabled;
     controls.enabled = navEnabled;
-    if (!navEnabled) held.clear(); // don't leave WASD keys "stuck" held when turned off
+    if (!navEnabled) localCameraControl.clearHeldKeys(); // don't leave WASD keys "stuck" held when turned off
     return navEnabled;
   },
 };
@@ -1791,17 +1792,20 @@ function tick() {
   const dt = timeFrozen ? 0 : rawDt;
   simTime += dt;
 
-  // applyMovement() moves camera.position directly every frame WASD is
-  // held — fine for the ground flythrough, but during the globe overview
-  // nothing else reacts to that move: usMap.js's marker <div>s are only
-  // repositioned by its own wheel/drag/zoom handlers, not by this. Held
-  // WASD (if navEnabled was ever toggled on) would silently drag the camera
-  // away from the overview's own lat/lon/zoom pose every frame, while the
-  // globe itself (rendered fresh from the real camera every frame) visibly
-  // moved and the markers stayed frozen at their last computed position —
-  // exactly the "ground moves, pins don't" symptom, worsening the longer
-  // WASD was held, independent of anything zoom-related.
-  if (!updateFlight(dt) && !overviewActive) applyMovement(dt);
+  // localCameraControl.update() moves camera.position directly every frame
+  // WASD is held or the wheel is spinning — fine for the ground flythrough,
+  // but during the globe overview nothing else reacts to that move:
+  // usMap.js's marker <div>s are only repositioned by its own wheel/drag/
+  // zoom handlers, not by this. Held WASD (if navEnabled was ever toggled
+  // on) would silently drag the camera away from the overview's own lat/
+  // lon/zoom pose every frame, while the globe itself (rendered fresh from
+  // the real camera every frame) visibly moved and the markers stayed
+  // frozen at their last computed position — exactly the "ground moves,
+  // pins don't" symptom, worsening the longer WASD was held, independent of
+  // anything zoom-related. (Wheel input is separately guarded inside
+  // localCameraControl itself via isLocalViewActive, since its listener
+  // stays attached the whole time rather than only being called from here.)
+  if (!updateFlight(dt) && !overviewActive) localCameraControl.update(dt);
   weather.updateGust(dt);
 
   if (timeMode === 'live') {
@@ -1874,7 +1878,7 @@ function tick() {
   // ones — scattering them across literally the whole visible sky. Passing
   // `!overviewActive` as weather.updateParticles' `active` flag is what
   // actually makes it stick, immediately, the same way
-  // applyMovement/controls.update() are already skipped there.
+  // localCameraControl.update()/controls.update() are already skipped there.
   weather.updateParticles(dt, camera.position, !overviewActive);
 
   const sunDir = updateLighting();
