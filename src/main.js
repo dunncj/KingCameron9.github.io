@@ -539,7 +539,7 @@ function applyLiveWeather() {
 // deadpan "condition" and a suitably brutal temperature instead of hiding
 // the row (see enterOverview).
 const SPACE_WEATHER_LABEL = 'Vacuum';
-const SPACE_TEMP_F = -200;
+const SPACE_TEMP_F = -457;
 
 let playerPanel = null; // set once buildPlayerPanel runs; keeps the user-facing panel in sync
 // Placeholder only — overwritten as soon as a real location is picked (see
