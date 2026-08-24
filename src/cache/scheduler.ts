@@ -1,39 +1,45 @@
+import type { PreloadSettings } from '../settings/types';
+
 // One scheduler for every "load this before it's needed" trigger the
 // overview and its markers have — hovering near a marker, actually clicking
 // one, and idle background warming when nothing else is going on — so they
 // share a single dedupe/concurrency policy instead of three independent,
 // uncoordinated triggers competing for the same network. Deliberately
-// transport-agnostic: it knows nothing about DOM events, markers, or
-// what "heavy"/"light" actually fetch — callers register a name with two
+// transport-agnostic: it knows nothing about DOM events, markers, or what
+// "heavy"/"light" actually fetch — callers register a name with two
 // callbacks and call requestPreload/notifyActivity/notifyFlightStart/update
-// at the right moments (see usMap.js's hover handling and main.js's wiring).
+// at the right moments (see usMap.js's hover handling and main.js's
+// wiring). `params` is settings.preload itself — a live reference, so a
+// quality-tier switch (see quality.ts) that rewrites its fields takes
+// effect on the very next call, and the dev GUI's sliders bind to the same
+// object.
+interface LocationJobs {
+  heavy: () => void;
+  light: () => void;
+}
 
-// clickBackoffMs: after a click, how long idle/light preloading of OTHER
-// locations stays paused. idleDelayMs: how long the mouse must sit still
-// (and no flight be in progress) before idle preloading starts.
-// idleIntervalMs: spacing between successive idle light-preload jobs.
-// maxConcurrentHeavy: cap on simultaneous hover-triggered heavy preload
-// jobs — clicks always bypass this, see requestPreload. heavyCooldownMs:
-// don't re-run a location's heavy preload again this soon (hover
-// re-triggering the same marker, mostly). Defaults live in settings.toml's
-// [preload] table (see settings/store.ts) — `params` here is just this
-// factory's own fallback for a caller that doesn't pass one.
-const DEFAULT_PRELOAD_PARAMS = {
-  clickBackoffMs: 750, idleDelayMs: 4000, idleIntervalMs: 6000, maxConcurrentHeavy: 2, heavyCooldownMs: 20000,
-};
+export interface PreloadScheduler {
+  params: PreloadSettings;
+  registerLocation(name: string, jobs: LocationJobs): void;
+  requestPreload(name: string, options?: { immediate?: boolean }): void;
+  notifyActivity(): void;
+  notifyFlightStart(): void;
+  update(now?: number): void;
+  reset(): void;
+}
 
-export function createPreloadManager(params = DEFAULT_PRELOAD_PARAMS) {
-  const locations = new Map(); // name -> { heavy, light }
-  const heavyState = new Map(); // name -> last-run timestamp
-  const lightDone = new Set();
+export function createPreloadScheduler(params: PreloadSettings): PreloadScheduler {
+  const locations = new Map<string, LocationJobs>();
+  const heavyState = new Map<string, number>(); // name -> last-run timestamp
+  const lightDone = new Set<string>();
   let activeHeavyCount = 0;
   let lastActivityAt = 0;
   let lastFlightAt = 0;
   let lastIdleFireAt = 0;
   let idleCursor = 0;
 
-  function registerLocation(name, { heavy, light }) {
-    locations.set(name, { heavy, light });
+  function registerLocation(name: string, jobs: LocationJobs) {
+    locations.set(name, jobs);
   }
 
   // immediate: true bypasses the concurrency cap and cooldown entirely — a
@@ -41,7 +47,7 @@ export function createPreloadManager(params = DEFAULT_PRELOAD_PARAMS) {
   // location's tiles regardless of whatever else happens to be in flight.
   // Hover calls this without immediate, so a fast mouse sweep across
   // several markers doesn't fire a heavy job for every single one.
-  function requestPreload(name, { immediate = false } = {}) {
+  function requestPreload(name: string, { immediate = false }: { immediate?: boolean } = {}) {
     const entry = locations.get(name);
     if (!entry) return;
     const now = performance.now();
@@ -84,7 +90,7 @@ export function createPreloadManager(params = DEFAULT_PRELOAD_PARAMS) {
 
   // Call once per frame (or on any reasonably tight interval) — cheap when
   // there's nothing to do, which is most of the time.
-  function update(now = performance.now()) {
+  function update(now: number = performance.now()) {
     if (now - lastFlightAt < params.clickBackoffMs) return;
     if (now - lastActivityAt < params.idleDelayMs) return;
     if (now - lastIdleFireAt < params.idleIntervalMs) return;
@@ -93,11 +99,11 @@ export function createPreloadManager(params = DEFAULT_PRELOAD_PARAMS) {
     for (let i = 0; i < names.length; i++) {
       const idx = (idleCursor + i) % names.length;
       const name = names[idx];
-      if (lightDone.has(name)) continue;
+      if (name === undefined || lightDone.has(name)) continue;
       lightDone.add(name);
       idleCursor = (idx + 1) % names.length;
       lastIdleFireAt = now;
-      locations.get(name).light();
+      locations.get(name)?.light();
       return;
     }
     // Every registered location has already had its idle light pass —

@@ -11,7 +11,7 @@ import { buildDevConsole } from './devconsole';
 import {
   mountUSOverview, TILT_RAD, flyInParams, overviewFlightState, destPrefetchParams, hoverParams,
 } from './usMap.js';
-import { createPreloadManager } from './preloadManager.js';
+import { createCacheSystem } from './cache';
 import { movementParams, curveOptions } from './flightCurves';
 import { settings, exportSettingsToml } from './settings/store';
 import { buildSettingsCommand } from './settings/commands';
@@ -21,6 +21,7 @@ import { buildStarsCommand } from './commands/starsCommand';
 import { buildTravelCommand } from './commands/travelCommand';
 import { buildControlsCommand } from './commands/controlsCommand';
 import { buildDebugCommand } from './commands/debugCommand';
+import { buildCacheCommand } from './commands/cacheCommand';
 
 // Every saved location's position/target start as plain {x,y,z} data (TOML
 // has no "point" type — see settings.toml's [locations.*] tables); upgrade
@@ -780,17 +781,21 @@ async function buildDevGui() {
   destPrefetchFolder.add(destPrefetchParams, 'fetchBatchSize', 1, 25, 1).name('fetch batch/frame');
   destPrefetchFolder.add(destPrefetchParams, 'buildBatchSize', 1, 25, 1).name('build batch/frame');
 
-  // --- Preload manager (see preloadManager.js) — when hovering, clicking,
-  // and idling each trigger preloading, and how much they're allowed to
-  // step on each other's bandwidth.
-  const preloadFolder = transitionFolder.addFolder('Preload Manager');
+  // --- Cache & preload (see src/cache/) — one quality tier governs how
+  // aggressively hovering, clicking, and idling each trigger preloading
+  // (and how much they're allowed to step on each other's bandwidth), plus
+  // the 3D-tiles LRU cache itself; the sliders below let a single knob be
+  // fine-tuned live on top of whichever tier is currently active.
+  const preloadFolder = transitionFolder.addFolder('Cache & Preload');
+  preloadFolder.add({ quality: cache.getQuality() }, 'quality', cache.qualityOptions())
+    .name('quality').onChange((v) => cache.setQuality(v));
   preloadFolder.add(hoverParams, 'radiusPx', 10, 300, 5).name('hover radius (px)');
   preloadFolder.add(hoverParams, 'debounceMs', 0, 2000, 50).name('hover debounce (ms)');
-  preloadFolder.add(preloadManager.params, 'maxConcurrentHeavy', 1, 4, 1).name('max concurrent (hover)');
-  preloadFolder.add(preloadManager.params, 'heavyCooldownMs', 0, 60000, 1000).name('heavy cooldown (ms)');
-  preloadFolder.add(preloadManager.params, 'clickBackoffMs', 0, 5000, 50).name('click backoff (ms)');
-  preloadFolder.add(preloadManager.params, 'idleDelayMs', 0, 20000, 500).name('idle delay (ms)');
-  preloadFolder.add(preloadManager.params, 'idleIntervalMs', 500, 20000, 500).name('idle interval (ms)');
+  preloadFolder.add(cache.params, 'maxConcurrentHeavy', 1, 4, 1).name('max concurrent (hover)');
+  preloadFolder.add(cache.params, 'heavyCooldownMs', 0, 60000, 1000).name('heavy cooldown (ms)');
+  preloadFolder.add(cache.params, 'clickBackoffMs', 0, 5000, 50).name('click backoff (ms)');
+  preloadFolder.add(cache.params, 'idleDelayMs', 0, 20000, 500).name('idle delay (ms)');
+  preloadFolder.add(cache.params, 'idleIntervalMs', 500, 20000, 500).name('idle interval (ms)');
   preloadFolder.add(heavyPrefetchParams, 'resolutionScale', 0.05, 1, 0.05).name('3D tile prefetch res scale');
   preloadFolder.add(heavyPrefetchParams, 'staggerMs', 0, 1000, 20).name('3D tile prefetch stagger (ms)');
 
@@ -936,17 +941,20 @@ function prefetchLocationHeavy(name) {
   jobs.forEach((job, i) => setTimeout(job, i * staggerMs));
 }
 
-// One shared scheduler for every preload trigger below — hovering near a
-// marker, clicking one, and idle background warming when nothing else is
-// going on (see preloadManager.js for the actual policy). "heavy" is the
+// The cache/preload system (see src/cache/) — one shared scheduler for
+// every preload trigger below (hovering near a marker, clicking one, idle
+// background warming when nothing else is going on), plus the active
+// quality tier that governs how aggressively all of it runs, including the
+// 3D-tiles LRU cache itself (tiles.lruCache/errorTarget). "heavy" is the
 // real thing (prefetchLocationHeavy above); "light" is the same low-res,
 // low-stakes single-camera warm every location used to get unconditionally
 // a few seconds after every page load — now only spent on whichever
-// location is actually still idle-eligible, on the manager's own schedule.
-const preloadManager = createPreloadManager(settings.preload);
+// location is actually still idle-eligible, on the scheduler's own
+// schedule.
+const cache = createCacheSystem(tiles, settings.prefetch, settings.preload, settings.cache);
 Object.keys(LOCATION_CONFIGS).forEach((name) => {
   const cfg = LOCATION_CONFIGS[name];
-  preloadManager.registerLocation(name, {
+  cache.registerLocation(name, {
     heavy: () => prefetchLocationHeavy(name),
     light: () => tiles.prefetch(cfg.lat, cfg.lon),
   });
@@ -1182,7 +1190,7 @@ function enterOverview(seed, { push = true } = {}) {
   overview = mountUSOverview({
     scene, camera, controls, renderer,
     seed,
-    onActivity: () => preloadManager.notifyActivity(),
+    onActivity: () => cache.notifyActivity(),
     // Every travelToLocation destination gets a marker — clicking any of
     // them zooms in, then continues straight into that same dive at ground
     // level (startLookDown; see travelTo). Palo Alto is the one exception
@@ -1204,17 +1212,17 @@ function enterOverview(seed, { push = true } = {}) {
         // faces — flyTo turns to match it before handing off (see
         // bearingRad's comment).
         bearing: bearingRad(cfg.position, cfg.target),
-        // Anticipatory — see preloadManager.js. Hovering near a marker
+        // Anticipatory — see src/cache/. Hovering near a marker
         // runs the same heavy preload a click does, just earlier, subject
         // to the manager's own concurrency cap/cooldown so a fast sweep
         // across several markers doesn't fire all of them at once.
-        onHoverNear: () => preloadManager.requestPreload(name),
+        onHoverNear: () => cache.requestPreload(name),
         onFlightStart: () => {
           // A click always runs immediately regardless of the manager's
           // concurrency cap — hover may already have started this, but
           // travelTo needs it regardless of whether hover got there first.
-          preloadManager.requestPreload(name, { immediate: true });
-          preloadManager.notifyFlightStart();
+          cache.requestPreload(name, { immediate: true });
+          cache.notifyFlightStart();
         },
         onSelect: () => {
           leaveOverview();
@@ -1304,6 +1312,12 @@ const weatherControl = {
   setCloudFormation: weather.setCloudFormation,
 };
 
+const cacheControl = {
+  getQuality: cache.getQuality,
+  qualityOptions: cache.qualityOptions,
+  setQuality: cache.setQuality,
+};
+
 const starsControl = {
   setDensity: (v) => { starParams.density = v; },
   setBrightness: (v) => { starParams.brightness = v; },
@@ -1357,6 +1371,7 @@ buildDevConsole([
   buildTravelCommand(travelControl),
   buildControlsCommand(controlsToggle),
   buildDebugCommand(debugSnapshot),
+  buildCacheCommand(cacheControl),
 ]);
 
 // --- Lighting / sky update ---
@@ -1768,7 +1783,7 @@ function tick() {
   updateGodRays(sunDir);
   weather.updateWindBlur();
   updateZoomBlur();
-  preloadManager.update();
+  cache.update();
   weather.updateLightning(dt, camera.position);
   // Same curve updateLighting() uses internally for the moon/night light
   // floor — recomputed here since that's a local inside updateLighting(),

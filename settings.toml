@@ -137,6 +137,122 @@ idleIntervalMs = 6000
 maxConcurrentHeavy = 2
 heavyCooldownMs = 20000
 
+# --- Cache & preload quality ---------------------------------------------
+# One named tier bundles every knob above (plus the 3D-tiles LRU cache,
+# which isn't its own settings table — see src/cache/quality.ts) into a
+# single "how aggressively should this site cache/preload" dial. `quality`
+# picks which tier is active on load; switching it at runtime (the ":cache
+# quality <name>" console command, or the dev GUI) re-applies that tier's
+# numbers onto the live [prefetch.*]/[preload] tables above, the same way
+# a weather preset re-applies onto [clouds]/[wind]/etc.
+#
+# [cache.qualities.high]'s own values are deliberately identical to
+# [prefetch.*]/[preload] above (high is the shipped default — nothing to
+# apply on a normal load) and to tiles.js's own hardcoded fallback
+# constants (belt-and-suspenders: the site still behaves the same even if
+# something went wrong loading settings.toml). low/medium/epic scale every
+# knob from there — smaller/looser for low (leaner network & memory use),
+# larger/tighter for epic ("epic" as in the classic game-graphics-settings
+# ladder: low/medium/high/epic).
+[cache]
+quality = "high"
+
+[cache.qualities.low]
+clickBackoffMs = 750
+idleDelayMs = 8000
+idleIntervalMs = 12000
+maxConcurrentHeavy = 1
+heavyCooldownMs = 40000
+heavyResolutionScale = 0.18
+heavyWideResW = 160
+heavyWideResH = 90
+heavyDurationMs = 8000
+heavyStaggerMs = 250
+hoverRadiusPx = 60
+hoverDebounceMs = 250
+destHighRes = { radius = 0, zoomDrop = 0 }
+destMedRes = { radius = 1, zoomDrop = 4 }
+destLowRes = { radius = 1, zoomDrop = 7 }
+destVeryLowRes = { radius = 0, zoomDrop = 0 }
+destEdgeFadeStrength = 0.5
+destFetchBatchSize = 3
+destBuildBatchSize = 2
+tilesMaxSizeMB = 150
+tilesMaxItems = 1500
+tilesErrorTarget = 28
+
+[cache.qualities.medium]
+clickBackoffMs = 750
+idleDelayMs = 5000
+idleIntervalMs = 8000
+maxConcurrentHeavy = 2
+heavyCooldownMs = 28000
+heavyResolutionScale = 0.26
+heavyWideResW = 240
+heavyWideResH = 135
+heavyDurationMs = 11000
+heavyStaggerMs = 180
+hoverRadiusPx = 75
+hoverDebounceMs = 200
+destHighRes = { radius = 0, zoomDrop = 0 }
+destMedRes = { radius = 1, zoomDrop = 3 }
+destLowRes = { radius = 2, zoomDrop = 6 }
+destVeryLowRes = { radius = 1, zoomDrop = 8 }
+destEdgeFadeStrength = 0.55
+destFetchBatchSize = 4
+destBuildBatchSize = 3
+tilesMaxSizeMB = 260
+tilesMaxItems = 2600
+tilesErrorTarget = 20
+
+[cache.qualities.high]
+clickBackoffMs = 750
+idleDelayMs = 4000
+idleIntervalMs = 6000
+maxConcurrentHeavy = 2
+heavyCooldownMs = 20000
+heavyResolutionScale = 0.35
+heavyWideResW = 320
+heavyWideResH = 180
+heavyDurationMs = 15000
+heavyStaggerMs = 120
+hoverRadiusPx = 90
+hoverDebounceMs = 150
+destHighRes = { radius = 0, zoomDrop = 0 }
+destMedRes = { radius = 2, zoomDrop = 2 }
+destLowRes = { radius = 2, zoomDrop = 5 }
+destVeryLowRes = { radius = 1, zoomDrop = 8 }
+destEdgeFadeStrength = 0.6
+destFetchBatchSize = 6
+destBuildBatchSize = 4
+tilesMaxSizeMB = 400
+tilesMaxItems = 4000
+tilesErrorTarget = 16
+
+[cache.qualities.epic]
+clickBackoffMs = 600
+idleDelayMs = 2500
+idleIntervalMs = 4000
+maxConcurrentHeavy = 4
+heavyCooldownMs = 12000
+heavyResolutionScale = 0.55
+heavyWideResW = 480
+heavyWideResH = 270
+heavyDurationMs = 20000
+heavyStaggerMs = 80
+hoverRadiusPx = 120
+hoverDebounceMs = 100
+destHighRes = { radius = 1, zoomDrop = 0 }
+destMedRes = { radius = 2, zoomDrop = 1 }
+destLowRes = { radius = 3, zoomDrop = 4 }
+destVeryLowRes = { radius = 2, zoomDrop = 7 }
+destEdgeFadeStrength = 0.7
+destFetchBatchSize = 10
+destBuildBatchSize = 6
+tilesMaxSizeMB = 800
+tilesMaxItems = 7000
+tilesErrorTarget = 10
+
 # --- Locations ---------------------------------------------------------
 # position/target are local coordinates only meaningful once the 3D tiles
 # are re-centered at this location's own lat/lon (see tiles.teleport) —

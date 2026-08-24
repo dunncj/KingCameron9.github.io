@@ -160,6 +160,49 @@ export interface PreloadSettings {
   heavyCooldownMs: number;
 }
 
+// One named bundle covering every cache/preload knob — everything in
+// PrefetchSettings and PreloadSettings, plus the 3D-tiles LRU cache (not
+// otherwise part of the settings tree; see src/cache/quality.ts's own
+// comment for why). "high" is the shipped default and *is* what
+// settings.toml's [prefetch]/[preload] tables already contain — the other
+// three tiers scale every knob up or down from there.
+export interface CacheQualitySettings {
+  // preload scheduler (see src/cache/scheduler.ts)
+  clickBackoffMs: number;
+  idleDelayMs: number;
+  idleIntervalMs: number;
+  maxConcurrentHeavy: number;
+  heavyCooldownMs: number;
+  // heavy (click-triggered) 3D-tile prefetch
+  heavyResolutionScale: number;
+  heavyWideResW: number;
+  heavyWideResH: number;
+  heavyDurationMs: number;
+  heavyStaggerMs: number;
+  // hover-triggered preload distance/debounce
+  hoverRadiusPx: number;
+  hoverDebounceMs: number;
+  // globe overview's destination satellite-image grid prefetch
+  destHighRes: PrefetchTierSettings;
+  destMedRes: PrefetchTierSettings;
+  destLowRes: PrefetchTierSettings;
+  destVeryLowRes: PrefetchTierSettings;
+  destEdgeFadeStrength: number;
+  destFetchBatchSize: number;
+  destBuildBatchSize: number;
+  // 3D-tiles LRU geometry cache (see tiles.js's buildTiles)
+  tilesMaxSizeMB: number;
+  tilesMaxItems: number;
+  tilesErrorTarget: number;
+}
+
+export type CacheQualityName = 'low' | 'medium' | 'high' | 'epic';
+
+export interface CacheSettings {
+  quality: CacheQualityName;
+  qualities: Record<CacheQualityName, CacheQualitySettings>;
+}
+
 // A saved camera pose at a real-world lat/lon. position/target start as
 // plain {x,y,z} data here (TOML has no "point" type) — main.js upgrades
 // each one to a real THREE.Vector3 once, right after the store loads (see
@@ -224,6 +267,7 @@ export interface Settings {
   transitions: TransitionSettings;
   prefetch: PrefetchSettings;
   preload: PreloadSettings;
+  cache: CacheSettings;
   locations: Record<string, LocationSettings>;
   presets: Record<string, PresetSettings>;
   weatherGraphs: Record<string, WeatherGraph>;
