@@ -517,6 +517,20 @@ function estimatedTempF() {
   return baseTempF + weather.tempDeltaF();
 }
 
+// Real-world UTC offset for an IANA timeZone at this instant, DST included
+// — unlike LocationSettings.utcOffset (a fixed winter/standard-time value
+// used only for sim mode's fictional display), live mode needs today's
+// actual offset so the real local hour — and the sun's actual daytime vs.
+// nighttime position — come out right whether or not DST happens to be in
+// effect right now. Formats the same instant into both the target zone's
+// and UTC's wall-clock strings and diffs them — no timezone database
+// bundled, just what the browser's Intl implementation already knows.
+function currentUtcOffsetHours(timeZone, now = new Date()) {
+  const tzWall = new Date(now.toLocaleString('en-US', { timeZone }));
+  const utcWall = new Date(now.toLocaleString('en-US', { timeZone: 'UTC' }));
+  return (tzWall.getTime() - utcWall.getTime()) / (1000 * 60 * 60);
+}
+
 // Re-picks weather for whichever location is current from
 // weather.pickLiveWeather — deterministic per real-world hour, so it holds
 // steady across reloads within the same hour instead of re-rolling every
@@ -1072,8 +1086,16 @@ function setTimeMode(mode, speedValue) {
     // the "shift by utcOffset only for display" convention the simulation
     // has always used. Converting once here keeps the switch visually
     // continuous — the rendered sky and the readout hold steady at the
-    // instant of the click instead of jumping by utcOffset hours — free to
-    // diverge from real time afterward, which is the whole point.
+    // instant of the click instead of jumping — free to diverge from real
+    // time afterward, which is the whole point.
+    //
+    // Deliberately the location's static utcOffset here, not
+    // currentUtcOffsetHours — sim mode's own display (below, in tick())
+    // adds back that same static value, so subtracting it now is what
+    // makes the two sides cancel out to a continuous readout. Using the
+    // DST-aware offset here instead would reintroduce exactly the jump
+    // this is trying to avoid, whenever DST currently differs from
+    // standard time.
     const utcOffset = overviewActive ? 0 : (LOCATION_CONFIGS[currentLocationName]?.utcOffset ?? 0);
     skyParams.hour = (skyParams.hour - utcOffset + 24) % 24;
   }
@@ -1825,10 +1847,17 @@ function tick() {
     // "world clock" that happens to read as UTC night. Only the overview
     // (no single location) falls back to plain UTC, matching its "World
     // Time (UTC)" label below.
+    //
+    // Uses currentUtcOffsetHours (timeZone, DST-aware), not the location's
+    // static utcOffset — that field is a fixed winter/standard-time value,
+    // so for roughly half the year (whenever DST is in effect) it was an
+    // hour off from the actual local clock.
     if (!timeFrozen) {
       const now = new Date();
       const utcHour = now.getUTCHours() + now.getUTCMinutes() / 60 + now.getUTCSeconds() / 3600;
-      const utcOffset = overviewActive ? 0 : (LOCATION_CONFIGS[currentLocationName]?.utcOffset ?? 0);
+      const utcOffset = overviewActive ? 0 : currentUtcOffsetHours(
+        LOCATION_CONFIGS[currentLocationName]?.timeZone ?? 'UTC', now,
+      );
       skyParams.hour = (utcHour + utcOffset + 24) % 24;
       const hourBucket = Math.floor(now.getTime() / (1000 * 60 * 60));
       if (hourBucket !== lastLiveWeatherHourBucket) applyLiveWeather();

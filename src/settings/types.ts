@@ -238,7 +238,12 @@ export interface LocationSettings {
   slug: string;
   lat: number;
   lon: number;
+  // Fixed standard-time (winter/non-DST) offset — used only by sim mode's
+  // fictional "local time" display. Live mode uses timeZone instead (see
+  // main.js's currentUtcOffsetHours), since a fixed offset is wrong for
+  // roughly half the year in any US timezone.
   utcOffset: number;
+  timeZone: string;
   baseTempF: number;
   nightBrightness: number;
   position: Point3;

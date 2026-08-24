@@ -267,6 +267,11 @@ tilesErrorTarget = 10
 # see main.js's own comments on PALO_ALTO_VIEW/URBANA_VIEW/etc for how each
 # one was derived. nightBrightness scales how bright stars/moon read at
 # this location — real light pollution varies a lot by where you are.
+# utcOffset is a fixed standard-time (winter/non-DST) value used only by the
+# sim/fast-forward clock's fictional "local time" display, which was never
+# meant to be real-world accurate. timeZone (an IANA identifier) is what
+# live mode actually uses — see main.js's currentUtcOffsetHours — computed
+# fresh via Intl so it's correct whether or not DST is in effect right now.
 
 [locations.paloAlto]
 label = "Palo Alto, CA"
@@ -274,6 +279,7 @@ slug = "palo-alto"
 lat = 37.418084
 lon = -122.145394
 utcOffset = -8
+timeZone = "America/Los_Angeles"
 baseTempF = 62
 nightBrightness = 1.0
 position = { x = 211.96, y = 57.77, z = -2643.21 }
@@ -285,6 +291,7 @@ slug = "urbana"
 lat = 40.109179
 lon = -88.227243
 utcOffset = -6
+timeZone = "America/Chicago"
 baseTempF = 54
 nightBrightness = 1.4
 position = { x = 0, y = 237.1, z = 0 }
@@ -296,6 +303,7 @@ slug = "falls-church"
 lat = 38.897236
 lon = -77.190797
 utcOffset = -5
+timeZone = "America/New_York"
 baseTempF = 58
 nightBrightness = 1.0
 position = { x = 0, y = 125.3, z = 0 }
@@ -307,6 +315,7 @@ slug = "chantilly"
 lat = 38.873825
 lon = -77.441261
 utcOffset = -5
+timeZone = "America/New_York"
 baseTempF = 56
 nightBrightness = 1.0
 position = { x = 0, y = 91.1, z = 0 }
