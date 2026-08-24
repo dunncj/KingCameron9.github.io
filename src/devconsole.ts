@@ -42,7 +42,7 @@ const STYLE = /* css */`
   }
 `;
 
-function injectStyleOnce() {
+function injectStyleOnce(): void {
   if (document.getElementById('devconsole-style')) return;
   const styleEl = document.createElement('style');
   styleEl.id = 'devconsole-style';
@@ -50,11 +50,54 @@ function injectStyleOnce() {
   document.head.appendChild(styleEl);
 }
 
+// A command's `args` schema is a discriminated union on `type` — every arg
+// gets validated here, once, before any command body ever runs, so bad
+// input fails loudly and specifically instead of silently producing NaN
+// that only breaks something several layers away (a shader uniform, a
+// WebGL draw call).
+export interface NumberArgSpec {
+  type: 'number';
+  name: string;
+  min?: number;
+  max?: number;
+  optional?: boolean;
+  default?: number;
+}
+
+export interface EnumArgSpec {
+  type: 'enum';
+  name: string;
+  values: readonly string[];
+  optional?: boolean;
+  default?: string;
+}
+
+// A single trailing string, already space-joined by run() — the escape
+// hatch a command reaches for when its own sub-arguments (a nested action,
+// a free-form name) don't fit this flat schema; see splitRest below.
+export interface RestArgSpec {
+  type: 'rest';
+  name: string;
+  optional?: boolean;
+  default?: string;
+}
+
+export type ArgSpec = NumberArgSpec | EnumArgSpec | RestArgSpec;
+
+export type ArgValue = string | number | undefined;
+
+export interface Command {
+  name: string;
+  description: string;
+  args: readonly ArgSpec[];
+  run(values: ArgValue[]): string | void | Promise<string | void>;
+}
+
 // Exported so a command's own `run()` can validate a value it parses itself
 // (e.g. a sub-argument whose meaning depends on an earlier "mode" arg,
-// which the flat schema below can't express) with the exact same rules —
+// which the flat schema above can't express) with the exact same rules —
 // and the exact same clear failure — as a normal schema-declared number.
-export function parseNumber(raw, label, min, max) {
+export function parseNumber(raw: string | undefined, label: string, min?: number, max?: number): number {
   if (raw === undefined || raw === '') throw new Error(`missing <${label}>`);
   const n = parseFloat(raw);
   if (Number.isNaN(n)) throw new Error(`<${label}> should be a number, got "${raw}"`);
@@ -63,11 +106,15 @@ export function parseNumber(raw, label, min, max) {
   return n;
 }
 
-// A command's `args` schema is what makes bad input fail loudly and
-// specifically instead of silently producing NaN that only breaks
-// something several layers away (a shader uniform, a WebGL draw call) —
-// every arg is validated here, once, before any command body ever runs.
-function parseArg(raw, spec) {
+// The `{name:'args', type:'rest'}` + manual re-split idiom every
+// subcommand-style command (weather/travel/settings) used to repeat
+// individually — one shared helper instead, so "unknown <action>" error
+// messages and the lowercasing rule stay consistent everywhere they're used.
+export function splitRest(raw: string | undefined): string[] {
+  return (raw || '').split(/\s+/).filter(Boolean);
+}
+
+function parseArg(raw: string | undefined, spec: ArgSpec): ArgValue {
   if (raw === undefined || raw === '') {
     if (spec.optional) return spec.default;
     throw new Error(`missing <${spec.name}>`);
@@ -82,7 +129,7 @@ function parseArg(raw, spec) {
   return raw; // 'rest' — a single trailing string, already space-joined by run()
 }
 
-function usageOf(cmd) {
+function usageOf(cmd: Command): string {
   const argStr = cmd.args.map((a) => (a.optional ? `[${a.name}]` : `<${a.name}>`)).join(' ');
   return argStr ? `${cmd.name} ${argStr}` : cmd.name;
 }
@@ -90,11 +137,9 @@ function usageOf(cmd) {
 const TOAST_DURATION_MS = 3500;
 const TOAST_ERROR_DURATION_MS = 6000;
 
-// commandList: { name, description, args: [{ name, type: 'number'|'enum'|
-// 'rest', min?, max?, values?, optional?, default? }], run(values) }[] —
 // run() may be async and may return a string to show as feedback, or throw
 // an Error whose message gets shown alongside the command's usage line.
-export function buildDevConsole(commandList) {
+export function buildDevConsole(commandList: Command[]): void {
   injectStyleOnce();
 
   const commands = new Map(commandList.map((c) => [c.name, c]));
@@ -105,21 +150,21 @@ export function buildDevConsole(commandList) {
     run: () => commandList.map((c) => `${usageOf(c)} — ${c.description}`).join('\n'),
   });
 
-  const history = [];
+  const history: string[] = [];
   let historyIndex = 0;
-  let inputBar = null;
-  let input = null;
-  let toast = null;
-  let toastTimer = null;
+  let inputBar: HTMLDivElement | null = null;
+  let input: HTMLInputElement | null = null;
+  let toast: HTMLDivElement | null = null;
+  let toastTimer: ReturnType<typeof setTimeout> | undefined;
 
-  function closeInput() {
+  function closeInput(): void {
     if (!inputBar) return;
     inputBar.remove();
     inputBar = null;
     input = null;
   }
 
-  function showToast(text, isError) {
+  function showToast(text: string, isError: boolean): void {
     clearTimeout(toastTimer);
     if (!toast) {
       toast = document.createElement('div');
@@ -127,16 +172,16 @@ export function buildDevConsole(commandList) {
       document.body.appendChild(toast);
     }
     toast.textContent = text;
-    toast.classList.toggle('devconsole-error', !!isError);
+    toast.classList.toggle('devconsole-error', isError);
     toastTimer = setTimeout(() => {
-      toast.remove();
+      toast?.remove();
       toast = null;
     }, isError ? TOAST_ERROR_DURATION_MS : TOAST_DURATION_MS);
   }
 
-  async function run(line) {
+  async function run(line: string): Promise<void> {
     const [rawName, ...rest] = line.split(/\s+/);
-    const name = rawName.toLowerCase();
+    const name = (rawName || '').toLowerCase();
     const cmd = commands.get(name);
     if (!cmd) {
       showToast(`unknown command "${name}" — try "help"`, true);
@@ -144,10 +189,10 @@ export function buildDevConsole(commandList) {
     }
 
     try {
-      const values = [];
+      const values: ArgValue[] = [];
       let idx = 0;
       for (const spec of cmd.args) {
-        let raw;
+        let raw: string | undefined;
         if (spec.type === 'rest') {
           raw = rest.slice(idx).join(' ') || undefined;
           idx = rest.length;
@@ -160,13 +205,13 @@ export function buildDevConsole(commandList) {
       const result = await cmd.run(values);
       showToast(result || `${name}: ok`, false);
     } catch (err) {
-      showToast(`${usageOf(cmd)} — ${err.message}`, true);
+      showToast(`${usageOf(cmd)} — ${(err as Error).message}`, true);
     }
   }
 
-  function openInput() {
+  function openInput(): void {
     if (inputBar) {
-      input.focus();
+      input?.focus();
       return;
     }
     inputBar = document.createElement('div');
@@ -190,7 +235,7 @@ export function buildDevConsole(commandList) {
       if (e.key === 'Escape') {
         closeInput();
       } else if (e.key === 'Enter') {
-        const line = input.value.trim();
+        const line = input!.value.trim();
         closeInput(); // exits immediately, like vim's command line — never lingers
         if (line) {
           history.push(line);
@@ -201,16 +246,16 @@ export function buildDevConsole(commandList) {
         e.preventDefault();
         if (historyIndex > 0) {
           historyIndex -= 1;
-          input.value = history[historyIndex];
+          input!.value = history[historyIndex] ?? '';
         }
       } else if (e.key === 'ArrowDown') {
         e.preventDefault();
         if (historyIndex < history.length - 1) {
           historyIndex += 1;
-          input.value = history[historyIndex];
+          input!.value = history[historyIndex] ?? '';
         } else {
           historyIndex = history.length;
-          input.value = '';
+          input!.value = '';
         }
       }
     });

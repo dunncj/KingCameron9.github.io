@@ -7,7 +7,7 @@ import { buildRain, buildSnow, buildWindStreaks, RAIN_MAX_INTENSITY, SNOW_MAX_IN
 import { buildClouds, CLOUD_FORMATIONS } from './clouds.js';
 import { buildComposer } from './postprocessing.js';
 import { buildPlayerPanel } from './player.js';
-import { buildDevConsole, parseNumber } from './devconsole.js';
+import { buildDevConsole } from './devconsole';
 import {
   mountUSOverview, TILT_RAD, flyInParams, overviewFlightState, destPrefetchParams, hoverParams,
 } from './usMap.js';
@@ -15,6 +15,12 @@ import { createPreloadManager } from './preloadManager.js';
 import { movementParams, curveOptions } from './flightCurves';
 import { settings, exportSettingsToml } from './settings/store';
 import { buildSettingsCommand } from './settings/commands';
+import { buildTimeCommand } from './commands/timeCommand';
+import { buildWeatherCommand } from './commands/weatherCommand';
+import { buildStarsCommand } from './commands/starsCommand';
+import { buildTravelCommand } from './commands/travelCommand';
+import { buildControlsCommand } from './commands/controlsCommand';
+import { buildDebugCommand } from './commands/debugCommand';
 
 // Every saved location's position/target start as plain {x,y,z} data (TOML
 // has no "point" type — see settings.toml's [locations.*] tables); upgrade
@@ -729,18 +735,25 @@ function updatePresetTransition(dt) {
   }
 }
 
-// --- GUI --- toggled via the hidden ":" console (see the "menu" and
-// "settings menu" commands below), not a visible button — one less thing
-// cluttering the screen for a tool nobody but the site owner ever needs.
-// One shared function (not duplicated inline in each command) so "menu"
-// and "settings menu show/hide/toggle" can't drift out of sync with each
-// other about what "visible" actually does.
+// --- GUI --- toggled via the hidden ":" console (see the "settings menu"
+// command below), not a visible button — one less thing cluttering the
+// screen for a tool nobody but the site owner ever needs.
 let guiVisible = false;
 async function setGuiVisible(visible) {
   if (!gui) await initDevGui();
   guiVisible = visible;
   gui.show(guiVisible);
   stats.dom.style.display = guiVisible ? 'block' : 'none';
+}
+
+// Caches the in-flight build so two overlapping "show" calls before the
+// first one finishes (e.g. a fast double-toggle from the console) await the
+// same construction instead of racing past `if (!gui)` and each building
+// their own lil-gui/stats.module instance.
+let devGuiPromise = null;
+function initDevGui() {
+  if (!devGuiPromise) devGuiPromise = buildDevGui();
+  return devGuiPromise;
 }
 
 // --- Debug: live camera state, copyable --- plain data, kept outside the
@@ -759,7 +772,7 @@ const debugState = {
 // Built once, on first "Menu" click: lil-gui and stats.module (plus every
 // folder/controller below) are dev-only tools hidden by default, so nobody
 // who never opens the menu should pay to download or construct them.
-async function initDevGui() {
+async function buildDevGui() {
   const [{ default: GUI }, { default: Stats }] = await Promise.all([
     import('lil-gui'),
     import('three/addons/libs/stats.module.js'),
@@ -1008,12 +1021,10 @@ let navEnabled = false;
 
 applyPreset('clear');
 
-// --- Locations --- lat/lon travels alongside each button's action so the
-// same list can also drive the background prefetch below.
-// Shared by the player panel's location buttons and the console's
-// "location"/"traveler" commands below — one source of truth for each
-// place's lat/lon and saved camera pose, instead of the flight-animated
-// button path and an instant-teleport path drifting out of sync.
+// --- Locations --- one source of truth for each place's lat/lon and saved
+// camera pose, shared by the globe overview's markers, the background
+// prefetch below, and the console's "travel" command — instead of the
+// flight-animated path and the instant-teleport path drifting out of sync.
 // utcOffset: standard-time hours from UTC (winter/non-DST) — good enough
 // for a labeled "local time" readout, not meant to track real DST
 // transitions. baseTempF: a rough year-round-average outdoor temperature
@@ -1188,7 +1199,7 @@ function matchLocationName(raw) {
 // --- User-facing panel (bottom-right): reports weather, temperature, and
 // time (converted to whichever location you're at, or world/UTC time in
 // space — see updatePlayerPanelStatus), plus how fast time passes. No
-// location picker — traveling is a console command (see devconsole.js).
+// location picker — traveling is a console command (see commands/travelCommand.ts).
 playerPanel = buildPlayerPanel({
   initialWeather: PRESETS[currentPresetName].label,
   initialTempF: estimatedTempF(),
@@ -1422,217 +1433,118 @@ function syncToPath() {
 window.addEventListener('popstate', syncToPath);
 syncToPath();
 
-// --- Hidden debug console (":" to open) --- see devconsole.js. Every
+// --- Hidden debug console (":" to open) --- see devconsole.ts. Each
+// command is a small factory from src/commands/ (composition-first,
+// TypeScript, no classes — see that directory) that this section wires up
+// with exactly the closures it needs over this module's own state, the
+// same pattern src/settings/commands.ts already used for "settings". Every
 // argument is declared (type/range/optional) so a bad command fails with a
 // specific, visible reason instead of quietly feeding NaN into a shader
 // uniform or a WebGL draw call somewhere downstream and freezing the frame.
-buildDevConsole([
-  {
-    name: 'time',
-    description: 'control the day-night clock: "set <hour>", "speed <hoursPerSec>", "freeze", "run"',
-    args: [
-      { name: 'action', type: 'enum', values: ['set', 'speed', 'freeze', 'run'] },
-      { name: 'value', type: 'rest', optional: true },
-    ],
-    run: ([action, value]) => {
-      if (action === 'set') {
-        const hour = parseNumber(value, 'hour', 0, 24);
-        skyParams.hour = hour % 24;
-        return `hour = ${skyParams.hour.toFixed(2)}`;
-      }
-      if (action === 'speed') {
-        timeSpeed = parseNumber(value, 'hoursPerSec', 0.001);
-        return `timeSpeed = ${timeSpeed}`;
-      }
-      if (action === 'freeze') {
-        timeFrozen = true;
-        // This is the master pause, not just the clock — see the comment
-        // by `timeFrozen`'s declaration — so mouse-drag orbiting (the one
-        // camera input that isn't driven by the loop's own dt) needs its
-        // own explicit hold here, saved to restore on "time run".
-        navEnabledBeforeTimeFreeze = navEnabled;
-        navEnabled = false;
-        controls.enabled = false;
-        held.clear();
-        return 'time = frozen (whole simulation paused)';
-      }
-      // action === 'run'
-      timeFrozen = false;
-      navEnabled = navEnabledBeforeTimeFreeze;
-      controls.enabled = navEnabled;
-      return 'time = running';
-    },
+const clockControl = {
+  getHour: () => skyParams.hour,
+  setHour: (hour) => { skyParams.hour = hour; },
+  getSpeed: () => timeSpeed,
+  setSpeed: (v) => { timeSpeed = v; },
+  freeze: () => {
+    timeFrozen = true;
+    // This is the master pause, not just the clock — see the comment by
+    // `timeFrozen`'s declaration — so mouse-drag orbiting (the one camera
+    // input that isn't driven by the loop's own dt) needs its own explicit
+    // hold here, saved to restore on "time run".
+    navEnabledBeforeTimeFreeze = navEnabled;
+    navEnabled = false;
+    controls.enabled = false;
+    held.clear();
   },
-  {
-    name: 'weather',
-    description: 'set <preset>, speed <hours>, freeze, run, graph, or clouds <setting> <value> (coverage/density/levels/formation)',
-    // Deliberately not the enum/number schema the other commands use —
-    // "set" takes a free-form, multi-word preset name ("Heavy Snow") and
-    // "clouds" takes its own nested action+value, neither of which fits
-    // the flat schema below — this command parses and validates its own
-    // sub-arguments instead, same shape (action, then args) throughout.
-    args: [{ name: 'args', type: 'rest' }],
-    run: ([argString]) => {
-      const parts = (argString || '').split(/\s+/).filter(Boolean);
-      const action = (parts[0] || '').toLowerCase();
+  run: () => {
+    timeFrozen = false;
+    navEnabled = navEnabledBeforeTimeFreeze;
+    controls.enabled = navEnabled;
+  },
+};
 
-      if (action === 'set') {
-        const name = parts.slice(1).join(' ');
-        const match = matchPresetName(name);
-        if (!match) {
-          throw new Error(`unknown preset "${name}" — try: ${Object.values(PRESETS).map((p) => p.label).join(', ')}`);
-        }
-        applyPreset(match);
-        return `weather = ${PRESETS[match].label}`;
-      }
-      if (action === 'speed') {
-        weatherChangeIntervalHours = parseNumber(parts[1], 'hours', 0.1, 100);
-        return `weather changes roughly every ${weatherChangeIntervalHours} sim hours`;
-      }
-      if (action === 'freeze') {
-        autoWeatherFrozen = true;
-        return `weather = frozen on ${PRESETS[currentPresetName].label}`;
-      }
-      if (action === 'run') {
-        autoWeatherFrozen = false;
-        autoWeatherTimer = nextWeatherInterval();
-        return 'weather = auto-changing again';
-      }
-      if (action === 'graph') {
-        const graph = WEATHER_GRAPHS[currentLocationName] || WEATHER_GRAPHS.paloAlto;
-        const edges = graph[currentPresetName];
-        const locationLabel = LOCATION_CONFIGS[currentLocationName].label;
-        const presetLabel = PRESETS[currentPresetName].label;
-        if (!edges) return `${locationLabel}: "${presetLabel}" has no graph edges — next roll picks evenly from every node`;
-        const total = edges.reduce((sum, [, weight]) => sum + weight, 0);
-        const options = edges
-          .map(([name, weight]) => `${PRESETS[name].label} ${Math.round((weight / total) * 100)}%`)
-          .join(', ');
-        return `${locationLabel}: ${presetLabel} -> ${options}`;
-      }
-      if (action === 'clouds') {
-        const setting = parts[1];
-        const value = parts[2];
-        if (setting === 'coverage') {
-          cloudParams.coverage = parseNumber(value, 'coverage', 0, 1);
-          return `clouds coverage = ${cloudParams.coverage}`;
-        }
-        if (setting === 'density') {
-          cloudParams.density = parseNumber(value, 'density', 0, 1);
-          return `clouds density = ${cloudParams.density}`;
-        }
-        if (setting === 'levels') {
-          cloudParams.levels = Math.round(parseNumber(value, 'levels', 1, 3));
-          return `clouds levels = ${cloudParams.levels}`;
-        }
-        if (setting === 'formation') {
-          if (!CLOUD_FORMATIONS.includes(value)) {
-            throw new Error(`formation should be one of: ${CLOUD_FORMATIONS.join(', ')} — got "${value}"`);
-          }
-          cloudParams.formation = value;
-          return `clouds formation = ${value}`;
-        }
-        throw new Error(`unknown "clouds" setting "${setting}" — try: coverage, density, levels, formation`);
-      }
-      throw new Error(`<action> should be one of: set, speed, freeze, run, graph, clouds — got "${parts[0] || ''}"`);
-    },
+const weatherControl = {
+  matchPreset: matchPresetName,
+  presetLabel: (key) => PRESETS[key].label,
+  presetLabels: () => Object.values(PRESETS).map((p) => p.label),
+  applyPreset,
+  currentPresetLabel: () => PRESETS[currentPresetName].label,
+  setChangeIntervalHours: (hours) => { weatherChangeIntervalHours = hours; },
+  freezeAuto: () => { autoWeatherFrozen = true; },
+  runAuto: () => { autoWeatherFrozen = false; autoWeatherTimer = nextWeatherInterval(); },
+  graphInfo: () => {
+    const graph = WEATHER_GRAPHS[currentLocationName] || WEATHER_GRAPHS.paloAlto;
+    const edges = graph[currentPresetName];
+    const locationLabel = LOCATION_CONFIGS[currentLocationName].label;
+    const presetLabel = PRESETS[currentPresetName].label;
+    if (!edges) return `${locationLabel}: "${presetLabel}" has no graph edges — next roll picks evenly from every node`;
+    const total = edges.reduce((sum, [, weight]) => sum + weight, 0);
+    const options = edges
+      .map(([name, weight]) => `${PRESETS[name].label} ${Math.round((weight / total) * 100)}%`)
+      .join(', ');
+    return `${locationLabel}: ${presetLabel} -> ${options}`;
   },
-  {
-    name: 'stars',
-    description: 'density <0-1> or brightness <0-2>',
-    args: [
-      { name: 'action', type: 'enum', values: ['density', 'brightness'] },
-      { name: 'value', type: 'rest' },
-    ],
-    run: ([action, value]) => {
-      if (action === 'density') {
-        starParams.density = parseNumber(value, 'density', 0, 1);
-        return `stars density = ${starParams.density}`;
-      }
-      starParams.brightness = parseNumber(value, 'brightness', 0, 6);
-      return `stars brightness = ${starParams.brightness}`;
-    },
+  cloudFormations: () => CLOUD_FORMATIONS,
+  setCloudCoverage: (v) => { cloudParams.coverage = v; },
+  setCloudDensity: (v) => { cloudParams.density = v; },
+  setCloudLevels: (v) => { cloudParams.levels = v; },
+  setCloudFormation: (v) => { cloudParams.formation = v; },
+};
+
+const starsControl = {
+  setDensity: (v) => { starParams.density = v; },
+  setBrightness: (v) => { starParams.brightness = v; },
+};
+
+// "location set <slug>" and "traveler goto <slug>" used to live here as two
+// separate commands — each just resolved a slug and called one of two
+// travel functions, so they were two thin near-identical wrappers around
+// the same lookup. Merged into one "travel" command (see
+// commands/travelCommand.ts) with go/instant modes instead.
+const travelControl = {
+  slugs: () => LOCATION_SLUGS,
+  matchLocation: matchLocationName,
+  label: (key) => LOCATION_CONFIGS[key].label,
+  travelAnimated: (key) => travelToLocation(key),
+  teleportInstant: (key) => teleportToLocation(key),
+};
+
+const controlsToggle = {
+  toggle: () => {
+    navEnabled = !navEnabled;
+    controls.enabled = navEnabled;
+    if (!navEnabled) held.clear(); // don't leave WASD keys "stuck" held when turned off
+    return navEnabled;
   },
-  // "loc <name>" used to live here — superseded by "location set <slug>"
-  // and "traveler goto <slug>" below, which split "no transition" from
-  // "with transition" instead of always traveling with the flight
-  // animation, and use the same non-space slugs every other command here
-  // takes rather than a free-form name with a space in it.
-  {
-    name: 'menu',
-    description: 'toggle the dev GUI panel (lil-gui + FPS counter) — see also "settings menu show/hide"',
-    args: [],
-    run: async () => {
-      await setGuiVisible(!guiVisible);
-      return `menu = ${guiVisible ? 'on' : 'off'}`;
-    },
-  },
+};
+
+const debugSnapshot = {
+  snapshot: () => ({
+    hour: skyParams.hour, timeSpeed, currentLocationName, currentPresetName,
+    starOpacity: sky.stars.material.opacity,
+    starDrawRange: sky.stars.geometry.drawRange,
+    sunOpacity: sky.sunSprite.material.opacity,
+    moonOpacity: sky.moonSprite.material.opacity,
+  }),
+};
+
+buildDevConsole([
+  buildTimeCommand(clockControl),
+  buildWeatherCommand(weatherControl),
+  buildStarsCommand(starsControl),
+  // A standalone "menu" command used to live here too, duplicating exactly
+  // what "settings menu show/hide/toggle" already does to the same
+  // `guiVisible` flag — dropped in favor of the one entry point.
   buildSettingsCommand({
     show: () => setGuiVisible(true),
     hide: () => setGuiVisible(false),
     toggle: () => setGuiVisible(!guiVisible),
     isVisible: () => guiVisible,
   }),
-  {
-    name: 'location',
-    description: 'set <name> teleports instantly (no flight animation); list shows available names',
-    args: [{ name: 'args', type: 'rest' }],
-    run: ([argString]) => {
-      const parts = (argString || '').split(/\s+/).filter(Boolean);
-      const action = (parts[0] || '').toLowerCase();
-
-      if (action === 'list') return LOCATION_SLUGS.join(', ');
-      if (action === 'set') {
-        const slug = parts[1];
-        const match = matchLocationName(slug);
-        if (!match) throw new Error(`unknown location "${slug || ''}" — try: ${LOCATION_SLUGS.join(', ')}`);
-        teleportToLocation(match);
-        return `location = ${LOCATION_CONFIGS[match].label} (instant)`;
-      }
-      throw new Error(`<action> should be one of: set, list — got "${parts[0] || ''}"`);
-    },
-  },
-  {
-    name: 'traveler',
-    description: 'goto <name> travels there with the same climb/descend flight the location buttons use',
-    args: [{ name: 'args', type: 'rest' }],
-    run: ([argString]) => {
-      const parts = (argString || '').split(/\s+/).filter(Boolean);
-      const action = (parts[0] || '').toLowerCase();
-
-      if (action === 'goto') {
-        const slug = parts[1];
-        const match = matchLocationName(slug);
-        if (!match) throw new Error(`unknown location "${slug || ''}" — try: ${LOCATION_SLUGS.join(', ')}`);
-        travelToLocation(match);
-        return `traveling to ${LOCATION_CONFIGS[match].label}`;
-      }
-      throw new Error(`<action> should be: goto — got "${parts[0] || ''}"`);
-    },
-  },
-  {
-    name: 'controls',
-    description: 'toggle WASD/QE flight and mouse-drag orbiting',
-    args: [],
-    run: () => {
-      navEnabled = !navEnabled;
-      controls.enabled = navEnabled;
-      if (!navEnabled) held.clear(); // don't leave WASD keys "stuck" held when turned off
-      return `controls = ${navEnabled ? 'on' : 'off'}`;
-    },
-  },
-  {
-    name: 'debug',
-    description: 'dump current sky/time state to the console',
-    args: [],
-    run: () => JSON.stringify({
-      hour: skyParams.hour, timeSpeed, currentLocationName, currentPresetName,
-      starOpacity: sky.stars.material.opacity,
-      starDrawRange: sky.stars.geometry.drawRange,
-      sunOpacity: sky.sunSprite.material.opacity,
-      moonOpacity: sky.moonSprite.material.opacity,
-    }),
-  },
+  buildTravelCommand(travelControl),
+  buildControlsCommand(controlsToggle),
+  buildDebugCommand(debugSnapshot),
 ]);
 
 // --- Lighting / sky update ---

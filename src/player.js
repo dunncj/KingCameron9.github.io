@@ -134,7 +134,7 @@ function formatHour(hour) {
 // opts: { initialWeather, initialTempF, initialHour, initialTimeLabel,
 //         speedOptions: number[], initialSpeedIndex, onSpeedChange(value) }
 // No location picker here — traveling is a console command now (see
-// devconsole.js's "location"/"traveler" — the panel only ever reported
+// commands/travelCommand.ts's "travel" — the panel only ever reported
 // state, it never needed to be the place that changes it), so main.js owns
 // all of the travel/routing logic in one place instead of splitting it
 // between a UI component and the console.
