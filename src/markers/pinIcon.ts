@@ -7,26 +7,27 @@
 // targeting a CSS background-image instead of a THREE.Texture) makes them
 // visually belong with the chunky retro look everything behind them has.
 //
-// Authored as a coordinate list, not nested loops shaping a circle — at
-// this size (10x12) a real map-pin silhouette (rounded head, pointed foot)
-// needs asymmetric, hand-placed pixels a formula won't produce cleanly.
-const PIN_WIDTH = 10;
-const PIN_HEIGHT = 12;
+// Authored as a coordinate list, not nested loops shaping a circle — the
+// classic pin silhouette (round head with a punched-out hole, tapering to
+// a point) needs asymmetric, hand-placed pixels a formula won't produce
+// cleanly at this size.
+const PIN_WIDTH = 9;
+const PIN_HEIGHT = 10;
 // Row-by-row fill mask, top to bottom — one string per row, one character
-// per pixel column. '.' = transparent, 'o' = outline, 'f' = fill.
+// per pixel column. '.' = transparent, 'o' = outline/hole (same color —
+// the hole reads as a clean punch-through, not a softer inner shadow),
+// 'f' = fill.
 const PIN_MASK = [
-  '..oooooo..',
-  '.offffffo.',
-  'offffffffo',
-  'offffffffo',
-  'offffffffo',
-  'offffffffo',
-  '.offffffo.',
-  '..oofoo...',
-  '...offo...',
-  '....of....',
-  '....of....',
-  '.....o....',
+  '...ooo...',
+  '..offfo..',
+  '.offfffo.',
+  'offoooffo',
+  'ofooooofo',
+  'offoooffo',
+  '.offfffo.',
+  '..offfo..',
+  '...ofo...',
+  '....o....',
 ];
 
 export interface PinIconOptions {
@@ -41,7 +42,7 @@ export interface PinIconOptions {
 export function createPixelPinIconUrl({
   fill = '#ff5a3c',
   outline = '#ffffff',
-  scale = 3,
+  scale = 2,
 }: PinIconOptions = {}): { url: string; width: number; height: number } {
   const canvas = document.createElement('canvas');
   canvas.width = PIN_WIDTH;

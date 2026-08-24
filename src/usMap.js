@@ -710,21 +710,27 @@ export function mountUSOverview({
 
   // Raycasts screen coordinates onto the globe and converts back to
   // lat/lon — exact regardless of the camera's tilt or the sphere's
-  // curvature, unlike a fixed per-pixel formula. Falls back to the current
-  // center if the ray misses the globe entirely (looking past its limb).
+  // curvature, unlike a fixed per-pixel formula. Returns null if the ray
+  // misses the globe entirely (looking past its limb) — callers that don't
+  // care (drag-panning) use screenToLatLon below, which falls back to the
+  // current center; the zoom-toward-cursor correction in stepZoomVelocity
+  // needs the real miss/hit distinction (see its own comment on why).
   const raycaster = new Raycaster();
   const ndcVec = new Vector2();
   const hitVec = new Vector3();
-  function screenToLatLon(px, py) {
+  function raySphereLatLon(px, py) {
     const rect = renderer.domElement.getBoundingClientRect();
     ndcVec.x = ((px - rect.left) / rect.width) * 2 - 1;
     ndcVec.y = -(((py - rect.top) / rect.height) * 2 - 1);
     raycaster.setFromCamera(ndcVec, camera);
     const hit = raycaster.ray.intersectSphere(globeSphere, hitVec);
-    if (!hit) return { lat: centerLat, lon: centerLon };
+    if (!hit) return null;
     const lat = (Math.asin(Math.min(1, Math.max(-1, hit.y / EARTH_RADIUS_SCENE))) * 180) / Math.PI;
     const lon = (Math.atan2(hit.x, hit.z) * 180) / Math.PI;
     return { lat, lon };
+  }
+  function screenToLatLon(px, py) {
+    return raySphereLatLon(px, py) ?? { lat: centerLat, lon: centerLon };
   }
 
   // --- Location markers ----------------------------------------------------
@@ -1182,8 +1188,13 @@ export function mountUSOverview({
   // level roughly doubles magnification), so it gets its own, much gentler
   // sensitivity — scrolling out stays responsive, scrolling in eases in
   // slowly instead of overshooting several levels in one flick.
-  const WHEEL_ZOOM_IN_SENSITIVITY = 0.0005;
-  const WHEEL_ZOOM_OUT_SENSITIVITY = 0.0022;
+  // Raised well past the old 0.0005/0.0022/0.08 — those capped a single
+  // flick's *total* eventual displacement (maxSpeed / damping, integrated
+  // over the whole decay) at roughly 0.01 zoom levels out of a ~19-level
+  // (minZoom..maxZoom) range, which read as barely responding at all to
+  // anything short of a long sustained trackpad swipe.
+  const WHEEL_ZOOM_IN_SENSITIVITY = 0.0015;
+  const WHEEL_ZOOM_OUT_SENSITIVITY = 0.0055;
 
   // Same "flick and glide" primitive the local ground view's dolly-zoom
   // uses (see camera/scrollVelocity.ts) — one wheel flick keeps easing for
@@ -1192,8 +1203,14 @@ export function mountUSOverview({
   // sit next to) is applied before the impulse goes in, so the shared
   // primitive itself stays direction-agnostic — sensitivity here is 1, a
   // pure passthrough.
-  const zoomVelocity = createScrollVelocity({ sensitivity: 1, damping: 7, maxSpeed: 0.08 });
+  const zoomVelocity = createScrollVelocity({ sensitivity: 1, damping: 7, maxSpeed: 0.22 });
   let zoomRaf = null;
+  // The cursor position onWheel last fired at — stepZoomVelocity below
+  // keeps re-centering on this every eased frame of the glide, not just
+  // the instant the wheel itself moved, so the point under the cursor
+  // stays put for the whole flick-and-glide, not just its first frame.
+  let lastWheelX = 0;
+  let lastWheelY = 0;
 
   function stepZoomVelocity() {
     let lastT = performance.now();
@@ -1202,7 +1219,38 @@ export function mountUSOverview({
       const dt = Math.min(0.048, (now - lastT) / 1000);
       lastT = now;
       const applied = zoomVelocity.update(dt);
-      zoom = Math.min(maxZoom, Math.max(minZoom, zoom - applied));
+      if (applied !== 0) {
+        // Zoom toward the cursor, exactly — not the "first-order
+        // approximation" this used to deliberately avoid (see the removed
+        // comment that used to sit here). The difference is real
+        // raycasting: find the ground point under the cursor *before*
+        // changing zoom, apply the zoom change, find where that same
+        // pixel now raycasts to, and pan by exactly the resulting drift.
+        // Two genuine ray/sphere intersections, not an estimate, so —
+        // unlike the old per-tick formula this replaces — repeating it
+        // every eased frame of a long scroll can't accumulate drift the
+        // way an approximation would. Uses raySphereLatLon (not
+        // screenToLatLon) deliberately: at a deep enough zoom the cursor's
+        // fixed screen position can hit the globe before the zoom change
+        // but miss it after (the visible patch shrinks as you zoom in), or
+        // vice versa. screenToLatLon's fallback-to-current-center on a miss
+        // is fine for drag-panning, but here it would diff a real hit
+        // against a stale fallback and inject a spurious jump into
+        // centerLat/centerLon — bad enough, on a bad-luck frame, to leave
+        // the camera looking at empty space and the raycast missing on
+        // every subsequent frame too, reading as the zoom having frozen.
+        // Skipping the correction outright on a miss avoids ever injecting
+        // that jump in the first place.
+        const before = raySphereLatLon(lastWheelX, lastWheelY);
+        zoom = Math.min(maxZoom, Math.max(minZoom, zoom - applied));
+        applyCamera();
+        const after = raySphereLatLon(lastWheelX, lastWheelY);
+        if (before && after) {
+          centerLat += before.lat - after.lat;
+          centerLon += before.lon - after.lon;
+          clampCenter();
+        }
+      }
       applyCamera();
       ensureGrid();
       zoomRaf = (!flying && applied !== 0) ? requestAnimationFrame(step) : null;
@@ -1221,16 +1269,14 @@ export function mountUSOverview({
   function onWheel(e) {
     if (flying) return;
     e.preventDefault();
-    // Deliberately does NOT re-center under the cursor. That used a
-    // before/after raycast against the sphere to compensate, but with this
-    // camera's fixed south-of-center tilt (see TILT_RAD) that correction is
-    // only a first-order approximation — each wheel tick nudges
-    // centerLat/centerLon by a slightly wrong amount, and hundreds of small
-    // scroll ticks compound that into a real lateral drift ("zooming in
-    // moves the camera up/down/left/right instead of straight forward").
-    // Zooming straight along the current center instead makes the motion
-    // exactly what it looks like: dollying in/out on a fixed point, with
-    // zero possibility of drift regardless of how long you scroll.
+    // Re-centers toward wherever the cursor was on the *most recent* wheel
+    // event of the current flick-and-glide, not a fresh point every frame
+    // — a trackpad's later events during one continuous gesture land
+    // almost exactly where the earlier ones did anyway, and holding it
+    // fixed avoids re-raycasting a cursor position that hasn't actually
+    // moved. See stepZoomVelocity for the actual before/after correction.
+    lastWheelX = e.clientX;
+    lastWheelY = e.clientY;
     const sensitivity = e.deltaY < 0 ? WHEEL_ZOOM_IN_SENSITIVITY : WHEEL_ZOOM_OUT_SENSITIVITY;
     zoomVelocity.addImpulse(e.deltaY * sensitivity);
     if (zoomRaf === null) stepZoomVelocity();

@@ -1,5 +1,5 @@
 import { createPixelPinIconUrl } from './pinIcon';
-import { layoutLabels, DEFAULT_LABEL_GAP, type LabelCandidate } from './layout';
+import { layoutLabels, type LabelCandidate } from './layout';
 
 export interface MarkerDescriptor {
   id: string;
@@ -21,12 +21,8 @@ export interface MarkerOverlay {
   // 2D presentation, the same split particles/weather use for GPU rendering
   // vs. simulation.
   update(projections: MarkerProjection[]): void;
-  // The true viewport-relative point a marker's anchor sits at — used for
-  // hover-proximity checks against real mouse coordinates (e.clientX/Y),
-  // which are viewport-relative regardless of whatever offset container
-  // sits between it and the page. getBoundingClientRect() (not the raw
-  // px/py this overlay was given) is what actually accounts for that, the
-  // same reasoning usMap.js's original marker code relied on.
+  // The true viewport-relative point a marker's pin sits at — used for
+  // hover-proximity checks against real mouse coordinates (e.clientX/Y).
   getScreenPoint(id: string): { x: number; y: number } | null;
   dispose(): void;
 }
@@ -47,23 +43,28 @@ export function createMarkerOverlay(
 ): MarkerOverlay {
   const pin = createPixelPinIconUrl({ fill: PIN_ACCENT });
 
-  const entries = markers.map((marker) => {
-    // `el` itself is a zero-size positioning anchor — left/top place its
-    // origin exactly at the marker's true screen point, and every child
-    // below positions itself relative to *that* origin, each with its own
-    // appropriate anchor (a symmetric circle could just center itself on
-    // the point; this pin has an asymmetric tip that has to be the part
-    // touching it).
-    const el = document.createElement('div');
-    el.style.cssText = `
-      position: absolute; left: 0; top: 0;
-      cursor: pointer; z-index: 10; user-select: none;
-    `;
+  // Two flat layers instead of one wrapper-per-marker: every marker's pin
+  // lives in the lower layer, every marker's label+connector in the upper
+  // one. A per-marker wrapper with its own z-index only controls paint
+  // order *within* that marker (pin under its own label) — it does nothing
+  // for two *different* markers sitting close together, where document
+  // order (not z-index) decides which one's pin ends up covering the
+  // other's label. Splitting into shared layers makes "no pin ever covers
+  // any label" true globally, regardless of which markers are nearby or in
+  // what order they were created.
+  const pinsLayer = document.createElement('div');
+  pinsLayer.style.cssText = 'position: absolute; left: 0; top: 0; z-index: 10;';
+  const labelsLayer = document.createElement('div');
+  labelsLayer.style.cssText = 'position: absolute; left: 0; top: 0; z-index: 20;';
+  container.appendChild(pinsLayer);
+  container.appendChild(labelsLayer);
 
-    // Bottom-center anchored to el's origin — pinIcon.ts's mask tapers to
-    // a single-pixel tip on its last row, centered horizontally, so this
-    // is what actually puts that tip (not the pin's bounding-box center)
-    // on the real point, the standard map-pin convention.
+  const entries = markers.map((marker) => {
+    // Bottom-center anchored — pinIcon.ts's mask tapers to a single-pixel
+    // tip on its last row, centered horizontally, so this is what actually
+    // puts that tip (not the pin's bounding-box center) on the real point,
+    // the standard map-pin convention. left/top are set every frame in
+    // update() to place that origin at the marker's true screen point.
     const pinEl = document.createElement('div');
     pinEl.style.cssText = `
       position: absolute; left: 0; top: 0;
@@ -72,45 +73,62 @@ export function createMarkerOverlay(
       background-image: url(${pin.url});
       background-size: 100% 100%;
       image-rendering: pixelated;
+      cursor: pointer; user-select: none;
     `;
+
+    // Positioning anchor for this marker's label + connector, in the
+    // labels layer — left/top track the same screen point as pinEl (set
+    // together in update()), but this wrapper itself has zero size so
+    // labelEl/connectorEl's own offsets stay relative to that exact point.
+    const labelAnchor = document.createElement('div');
+    labelAnchor.style.cssText = 'position: absolute; left: 0; top: 0;';
 
     // A tag, not a pill — hard corners (2px, not 999px) read as belonging
     // with the site's own chunky pixel-art aesthetic the way a fully
-    // rounded badge didn't. Positioned independently of pinEl (both are
-    // anchored to el's origin, not to each other) so update() can move it
-    // away from its default resting spot once layoutLabels() decides two
-    // markers' labels are too close to stay there.
+    // rounded badge didn't. Positioned via a plain translate(x, y) with no
+    // centering math of its own (which edge is "centered" depends on
+    // which of layoutLabels()'s four candidate directions was picked).
     const labelEl = document.createElement('div');
     labelEl.textContent = marker.label;
     labelEl.style.cssText = `
       position: absolute; left: 0; top: 0;
-      transform: translate(-50%, ${DEFAULT_LABEL_GAP}px);
       font: 600 12px system-ui, -apple-system, sans-serif;
       color: #fff; background: rgba(10,10,14,0.82);
       border: 1px solid rgba(255,255,255,0.25);
       padding: 3px 8px; border-radius: 2px; white-space: nowrap;
+      cursor: pointer; user-select: none;
     `;
 
     // A thin leader line back to the point — only shown when layoutLabels()
     // actually had to push this label away from its default resting spot
-    // to keep it from overlapping a neighbor's.
+    // to keep it from overlapping a neighbor's. A 1px-tall bar rotated to
+    // whatever angle actually reaches the label (it isn't always straight
+    // down anymore now that above/right/left are real candidates too).
+    // Purely decorative, so it stays out of the way of clicks/hover.
     const connectorEl = document.createElement('div');
     connectorEl.style.cssText = `
       position: absolute; left: 0; top: 0;
-      transform: translateX(-50%);
-      width: 1px; background: rgba(255,255,255,0.5);
+      height: 1px; background: rgba(255,255,255,0.5);
+      transform-origin: 0 0; pointer-events: none;
       display: none;
     `;
 
-    el.appendChild(connectorEl);
-    el.appendChild(pinEl);
-    el.appendChild(labelEl);
-    el.addEventListener('mousedown', (e) => e.stopPropagation());
-    el.addEventListener('click', (e) => {
+    labelAnchor.appendChild(connectorEl);
+    labelAnchor.appendChild(labelEl);
+    pinsLayer.appendChild(pinEl);
+    labelsLayer.appendChild(labelAnchor);
+
+    const handleClick = (e: MouseEvent) => {
       e.stopPropagation();
       onSelect(marker.id);
-    });
-    container.appendChild(el);
+    };
+    const stopDrag = (e: MouseEvent) => e.stopPropagation();
+    // Both the pin and the label are independently clickable/draggable-safe
+    // now that they're no longer nested under one shared hit-target.
+    pinEl.addEventListener('mousedown', stopDrag);
+    pinEl.addEventListener('click', handleClick);
+    labelEl.addEventListener('mousedown', stopDrag);
+    labelEl.addEventListener('click', handleClick);
 
     // Measured once — the label's text never changes after creation, and
     // layoutLabels() needs a real pixel width (marker names vary a lot in
@@ -119,7 +137,7 @@ export function createMarkerOverlay(
     const labelHeight = labelEl.offsetHeight;
 
     return {
-      id: marker.id, el, pinEl, labelEl, connectorEl, labelWidth, labelHeight,
+      id: marker.id, pinEl, labelAnchor, labelEl, connectorEl, labelWidth, labelHeight,
     };
   });
 
@@ -142,21 +160,26 @@ export function createMarkerOverlay(
     for (const p of projections) {
       const entry = byId.get(p.id);
       if (!entry) continue;
-      entry.el.style.display = p.visible ? 'block' : 'none';
+      const display = p.visible ? 'block' : 'none';
+      entry.pinEl.style.display = display;
+      entry.labelAnchor.style.display = display;
       if (!p.visible) continue;
 
-      entry.el.style.left = `${p.px}px`;
-      entry.el.style.top = `${p.py}px`;
+      entry.pinEl.style.left = `${p.px}px`;
+      entry.pinEl.style.top = `${p.py}px`;
+      entry.labelAnchor.style.left = `${p.px}px`;
+      entry.labelAnchor.style.top = `${p.py}px`;
 
       const placement = placements.get(p.id);
-      const dy = placement?.dy ?? DEFAULT_LABEL_GAP;
-      entry.labelEl.style.transform = `translate(-50%, ${dy}px)`;
+      const offset = placement?.offset ?? { x: -entry.labelWidth / 2, y: 6 };
+      entry.labelEl.style.transform = `translate(${offset.x}px, ${offset.y}px)`;
 
       if (placement?.needsConnector) {
-        // Runs from the point down to just short of the label's own top
-        // edge, so the line visually meets the tag instead of running
-        // under/through it.
-        entry.connectorEl.style.height = `${Math.max(0, dy - 2)}px`;
+        const { x: tx, y: ty } = placement.connectorTo;
+        const length = Math.hypot(tx, ty);
+        const angleDeg = (Math.atan2(ty, tx) * 180) / Math.PI;
+        entry.connectorEl.style.width = `${length}px`;
+        entry.connectorEl.style.transform = `rotate(${angleDeg}deg)`;
         entry.connectorEl.style.display = 'block';
       } else {
         entry.connectorEl.style.display = 'none';
@@ -166,13 +189,19 @@ export function createMarkerOverlay(
 
   function getScreenPoint(id: string): { x: number; y: number } | null {
     const entry = byId.get(id);
-    if (!entry || entry.el.style.display === 'none') return null;
-    const rect = entry.el.getBoundingClientRect();
-    return { x: rect.left, y: rect.top };
+    if (!entry || entry.pinEl.style.display === 'none') return null;
+    // pinEl's own box is the pin's actual rendered rect (width x height,
+    // bottom-center anchored via its transform) — not a zero-size point
+    // anymore, since it's positioned directly rather than nested inside a
+    // zero-size wrapper. Its horizontal center and bottom edge are exactly
+    // the true anchor point set in update().
+    const rect = entry.pinEl.getBoundingClientRect();
+    return { x: rect.left + rect.width / 2, y: rect.bottom };
   }
 
   function dispose() {
-    entries.forEach((entry) => entry.el.remove());
+    pinsLayer.remove();
+    labelsLayer.remove();
   }
 
   return {
