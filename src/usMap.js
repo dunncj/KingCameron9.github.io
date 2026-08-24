@@ -6,6 +6,7 @@ import { getMovementCurve } from './flightCurves';
 import { settings } from './settings/store';
 import { patchShaderSource } from './shaders';
 import { createScrollVelocity } from './camera/scrollVelocity';
+import { createMarkerOverlay } from './markers';
 
 // The landing experience: one continuous 3D camera, never a hard cut to a
 // separate renderer. Mounts a live, pixelated satellite-imagery patch onto
@@ -727,61 +728,28 @@ export function mountUSOverview({
   }
 
   // --- Location markers ----------------------------------------------------
-  // Plain HTML pins layered over the canvas (not WebGL geometry) — stay
-  // crisp regardless of the pixelation shader, and get click handling for
-  // free. Projected into screen space every time the camera changes.
+  // Projected into screen space every time the camera changes; the actual
+  // pixel-art pin/tag styling and label decluttering (see the Chantilly/
+  // Falls Church problem this replaced) live in src/markers/ now — this
+  // keeps only the globe-specific part here: real position, and the
+  // horizon/frustum visibility test below.
   const markerVec = new Vector3();
   const markerNormal = new Vector3();
   const cameraDir = new Vector3();
-  const markers = locations.map((loc) => {
-    // The pin's own box must be exactly centered on (px, py) — el itself
-    // only wraps the 14x14 pin, translated by exactly half its own size, so
-    // there's no other content inside el to throw that off. The label is
-    // pulled out of flow (position: absolute, anchored to el's box) so it
-    // can hang below without changing el's size or its translate offset.
-    // The previous layout put pin+label in one flex column and translated
-    // the *whole stack* by (-50%, -100%) — anchoring the bottom of the
-    // label (not the pin) to (px, py), leaving the actual pin rendered a
-    // fixed number of pixels above the true point. Negligible zoomed in,
-    // but that fixed pixel offset represents a real distance that scales
-    // directly with how zoomed out the view is — exactly the "marker looks
-    // fine up close, wildly off zoomed out" pattern this was causing.
-    const el = document.createElement('div');
-    el.style.cssText = `
-      position: absolute; left: 0; top: 0;
-      transform: translate(-50%, -50%);
-      cursor: pointer; z-index: 10; user-select: none;
-    `;
-    const pin = document.createElement('div');
-    pin.style.cssText = `
-      width: 14px; height: 14px; border-radius: 50%;
-      background: #ff5a3c; border: 2px solid #fff;
-      box-shadow: 0 0 0 2px rgba(0,0,0,0.4), 0 2px 6px rgba(0,0,0,0.5);
-    `;
-    const label = document.createElement('div');
-    // loc.name is a settings key now (e.g. "paloAlto"), not display text —
-    // loc.label carries the actual "Palo Alto, CA" string (see main.js's
-    // enterOverview). Falls back to loc.name for robustness if a caller
-    // ever omits it.
-    label.textContent = loc.label ?? loc.name;
-    label.style.cssText = `
-      position: absolute; top: 100%; left: 50%; margin-top: 4px;
-      transform: translateX(-50%);
-      font: 600 12px system-ui, -apple-system, sans-serif;
-      color: #fff; background: rgba(10,10,14,0.75);
-      padding: 3px 8px; border-radius: 999px; white-space: nowrap;
-    `;
-    el.appendChild(pin);
-    el.appendChild(label);
-    el.addEventListener('mousedown', (e) => e.stopPropagation());
-    el.addEventListener('click', (e) => {
-      e.stopPropagation();
-      flyTo(loc);
-    });
-    domParent.appendChild(el);
-    return { el, pos: sphereXYZ(loc.lat, loc.lon, EARTH_RADIUS_SCENE), loc };
-  });
-
+  const markers = locations.map((loc) => ({ loc, pos: sphereXYZ(loc.lat, loc.lon, EARTH_RADIUS_SCENE) }));
+  // loc.name is a settings key (e.g. "paloAlto"), not display text — loc.
+  // label carries the actual "Palo Alto, CA" string (see main.js's
+  // enterOverview). Falls back to loc.name for robustness if a caller ever
+  // omits it. Also doubles as the marker's id, so onSelect below can look
+  // the full loc object back up to hand to flyTo.
+  const markerOverlay = createMarkerOverlay(
+    domParent,
+    markers.map((m) => ({ id: m.loc.name, label: m.loc.label ?? m.loc.name })),
+    (id) => {
+      const m = markers.find((entry) => entry.loc.name === id);
+      if (m) flyTo(m.loc);
+    },
+  );
   function updateMarkers() {
     // The camera-frustum check below only knows about near/far clipping —
     // it has no idea the globe itself is a solid, opaque ball. A marker on
@@ -796,17 +764,17 @@ export function mountUSOverview({
     const cameraDist = camera.position.length();
     cameraDir.copy(camera.position).divideScalar(cameraDist);
     const cosHorizon = EARTH_RADIUS_SCENE / cameraDist;
-    for (const m of markers) {
+    const projections = markers.map((m) => {
       markerVec.copy(m.pos).project(camera);
       const px = (markerVec.x * 0.5 + 0.5) * viewportW;
       const py = (1 - (markerVec.y * 0.5 + 0.5)) * viewportH;
-      m.el.style.left = `${px}px`;
-      m.el.style.top = `${py}px`;
       markerNormal.copy(m.pos).divideScalar(EARTH_RADIUS_SCENE);
       const belowHorizon = markerNormal.dot(cameraDir) < cosHorizon;
       const offscreen = markerVec.z > 1 || px < -60 || px > viewportW + 60 || py < -60 || py > viewportH + 60;
-      m.el.style.display = offscreen || belowHorizon ? 'none' : 'flex';
-    }
+      const visible = !(offscreen || belowHorizon);
+      return { id: m.loc.name, px, py, visible };
+    });
+    markerOverlay.update(projections);
   }
 
   // --- Click a marker: pan (no zoom) to center the camera directly above
@@ -1362,11 +1330,9 @@ export function mountUSOverview({
     if (dragging || flying) return;
     const now = performance.now();
     for (const m of markers) {
-      if (m.el.style.display === 'none') continue;
-      const rect = m.el.getBoundingClientRect();
-      const cx = rect.left + rect.width / 2;
-      const cy = rect.top + rect.height / 2;
-      const dist = Math.hypot(e.clientX - cx, e.clientY - cy);
+      const point = markerOverlay.getScreenPoint(m.loc.name);
+      if (!point) continue;
+      const dist = Math.hypot(e.clientX - point.x, e.clientY - point.y);
       if (dist > hoverParams.radiusPx) continue;
       const last = hoverFired.get(m.loc.name) || 0;
       if (now - last < hoverParams.debounceMs) continue;
@@ -1562,7 +1528,7 @@ export function mountUSOverview({
     domParent.removeEventListener('wheel', onWheel);
     renderer.domElement.removeEventListener('mousedown', onPointerDown);
     renderer.domElement.style.cursor = prevCursor;
-    markers.forEach((m) => m.el.remove());
+    markerOverlay.dispose();
     title.remove();
     enterBtn.remove();
     zoomOutBtn.remove();
