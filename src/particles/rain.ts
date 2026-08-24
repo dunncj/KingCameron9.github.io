@@ -20,6 +20,13 @@ export interface RainParams {
   // until the first tick.
   windSpeed?: number;
   windDirection?: number;
+  // Render-quality lever (see src/quality/) — main.js overwrites this from
+  // the active quality tier the same way it does windSpeed/windDirection.
+  // Multiplies the intensity-driven density fraction below, so a "low"
+  // quality storm still reads as heavier rain than a "low" quality drizzle
+  // — it just draws fewer streaks doing it. Optional/undefined = 1 (no
+  // reduction), same reasoning as windSpeed/windDirection above.
+  densityScale?: number;
 }
 
 export interface RainOptions {
@@ -156,7 +163,7 @@ export function createRainField(scene: { add(o: Object3D): void }, params: RainP
     if (!params.enabled) return;
 
     const densityFraction = intensityToDensityFraction(params.intensity, maxIntensity, minDensityFraction);
-    activeCount = Math.floor(maxCount * densityFraction);
+    activeCount = Math.floor(maxCount * densityFraction * (params.densityScale ?? 1));
     geometry.setDrawRange(0, activeCount * 2);
     uniforms.uOpacity.value = baseOpacity * intensityToOpacityFraction(params.intensity);
     uniforms.uIntensityFallScale.value = intensityToSpeedScale(params.intensity);

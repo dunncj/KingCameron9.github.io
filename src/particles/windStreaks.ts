@@ -21,6 +21,9 @@ import { createSoftStreakTexture } from './textures';
 export interface WindStreaksParams {
   windSpeed: number;
   windDirection: number;
+  // Render-quality lever (see src/quality/) — see particles/rain.ts's
+  // RainParams.densityScale for the same reasoning.
+  densityScale?: number;
 }
 
 export interface WindStreaksOptions {
@@ -242,7 +245,10 @@ export function createWindStreaks(
       0,
       1,
     );
-    activeCount = Math.max(1, Math.floor(maxCount * MathUtils.lerp(0.12, 1, windFraction)));
+    activeCount = Math.max(
+      1,
+      Math.floor(maxCount * MathUtils.lerp(0.12, 1, windFraction) * (params.densityScale ?? 1)),
+    );
 
     // Wind itself is invisible — this should read as a soft, faint
     // suggestion of motion at low speeds, though a real gale earns a

@@ -16,7 +16,7 @@ export function buildCacheCommand(cache: CacheControl): Command {
   return {
     name: 'cache',
     description: 'quality [<low|medium|high|epic>] — show or set how aggressively tiles/preloading cache',
-    args: [{ type: 'rest', name: 'args' }],
+    args: [{ type: 'rest', name: 'args', optional: true }],
     run: ([argString]: ArgValue[]) => {
       const parts = splitRest(argString as string | undefined);
       const action = (parts[0] || '').toLowerCase();

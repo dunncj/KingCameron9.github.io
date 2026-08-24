@@ -203,6 +203,29 @@ export interface CacheSettings {
   qualities: Record<CacheQualityName, CacheQualitySettings>;
 }
 
+// The render-quality counterpart to CacheQualitySettings above — one named
+// bundle covering every rendering-cost knob that's safe to change at
+// runtime without rebuilding a GPU buffer (see src/quality/service.ts for
+// exactly what each field drives and why those particular knobs were
+// chosen). Shares CacheQualityName's low/medium/high/epic vocabulary
+// deliberately — `:quality <name>` sets both this and cache quality
+// together, since a visitor asking for "epic" means "everything," not
+// just one or the other.
+export interface RenderQualitySettings {
+  pixelSize: number;
+  devicePixelRatioCap: number;
+  starDensity: number;
+  starBrightness: number;
+  cloudActiveFraction: number;
+  precipitationDensityScale: number;
+  windStreaksDensityScale: number;
+}
+
+export interface RenderSettings {
+  quality: CacheQualityName;
+  qualities: Record<CacheQualityName, RenderQualitySettings>;
+}
+
 // A saved camera pose at a real-world lat/lon. position/target start as
 // plain {x,y,z} data here (TOML has no "point" type) — main.js upgrades
 // each one to a real THREE.Vector3 once, right after the store loads (see
@@ -268,6 +291,7 @@ export interface Settings {
   prefetch: PrefetchSettings;
   preload: PreloadSettings;
   cache: CacheSettings;
+  render: RenderSettings;
   locations: Record<string, LocationSettings>;
   presets: Record<string, PresetSettings>;
   weatherGraphs: Record<string, WeatherGraph>;

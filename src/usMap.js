@@ -958,11 +958,46 @@ export function mountUSOverview({
     img.src = url;
   }
 
+  // See ensureGrid's own comment for why this exists. GRID_REBUILD_DEBOUNCE_MS
+  // is deliberately short — long enough to coalesce a whole burst of wheel
+  // ticks or flyOut animation frames into one rebuild, short enough that a
+  // deliberate pause mid-zoom still resolves to real detail quickly.
+  const GRID_REBUILD_DEBOUNCE_MS = 150;
+  let gridRebuildTimer = null;
+  function scheduleGridRebuild() {
+    if (gridRebuildTimer) clearTimeout(gridRebuildTimer);
+    gridRebuildTimer = setTimeout(() => {
+      gridRebuildTimer = null;
+      const z = fetchZoomFor(zoom); // re-read — zoom may have moved further since scheduling
+      if (z <= wholeGlobeZ + 1) return;
+      clearTileCache();
+      currentGridZ = z;
+      gridGeneration += 1;
+      ensureGrid(); // now z === currentGridZ, falls straight into the cheap fill-in path
+    }, GRID_REBUILD_DEBOUNCE_MS);
+  }
+
   // Ensures the whole neighborhood around the current view is loaded — not
   // just the single cell under the camera. Cheap to call on every pan/zoom
   // event: most calls find every cell already cached (a handful of Map
   // lookups) and only occasionally trigger real fetches, when the center
   // cell itself changes.
+  //
+  // The zoom-tier-crossing case is the one exception to "cheap": it tears
+  // down and refetches the *entire* grid (clearTileCache + GRID_RADIUS^2
+  // new requests), not an incremental top-up. A fast continuous zoom —
+  // scrolling the wheel quickly, or flyOut's own animated zoom back out to
+  // the overview, both of which call ensureGrid() every frame — can cross
+  // several tiers in well under a second, and used to run that full
+  // teardown+rebuild at *each* one in turn: measured a single rendered
+  // frame stalling for tens of seconds during a fast zoom-out with a real
+  // API key configured (a burst of superseded-but-still-loading tile
+  // fetches, decodes, and shader-compiling materials, most of them thrown
+  // away moments later). scheduleGridRebuild debounces that expensive part
+  // — only the tier the zoom gesture actually settles on gets built, same
+  // debounce-until-it-settles idea as hoverParams.debounceMs elsewhere in
+  // this file. Cells already on screen just stay put (a stale-tier grid,
+  // not a flickering empty one) until the debounce fires.
   function ensureGrid() {
     const z = fetchZoomFor(zoom);
     // At or wider than the entry-level zoom, the permanent whole-globe
@@ -973,9 +1008,8 @@ export function mountUSOverview({
     // instead of stopping to fetch (and show) that intermediate one first.
     if (z <= wholeGlobeZ + 1) return;
     if (z !== currentGridZ) {
-      clearTileCache();
-      currentGridZ = z;
-      gridGeneration += 1;
+      scheduleGridRebuild();
+      return;
     }
     const generation = gridGeneration;
     const cellSize = REQUEST_SIZE / 2 ** z; // full tile width, in zoom-0 Mercator world units
@@ -1495,6 +1529,7 @@ export function mountUSOverview({
     // Hidden, not disposed — see ensureGlobeBase/setGlobeBaseVisible's own
     // comment on why this persists across mount/dispose cycles now.
     setGlobeBaseVisible(false);
+    if (gridRebuildTimer) { clearTimeout(gridRebuildTimer); gridRebuildTimer = null; }
     clearTileCache();
     disposeDestTiles();
   }
