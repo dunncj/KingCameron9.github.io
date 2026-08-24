@@ -125,7 +125,7 @@ const STAR_COUNT = 15000;
 
 // The full pool is generated once; "how starry" (starParams.density in
 // main.js) just draws a shorter prefix of it each frame via setDrawRange —
-// the same cheap density trick weather.js uses for rain/snow.
+// the same cheap density trick src/particles/ uses for rain/snow.
 function buildStars() {
   const positions = new Float32Array(STAR_COUNT * 3);
   const colors = new Float32Array(STAR_COUNT * 3);
@@ -234,9 +234,9 @@ function buildStars() {
   // MeshNormalMaterial override (for its edge-detection buffer). That
   // material expects real mesh normals/faces, which point geometry doesn't
   // have, so raw points get garbled during that pass and show up as
-  // artifacts — weather.js's rain/snow/wind-streak particles hit the exact
-  // same issue and fix it the same way: skip the draw entirely during the
-  // override pass.
+  // artifacts — src/particles/'s rain/snow/wind-streak particles hit the
+  // exact same issue and fix it the same way (see overridePass.ts): skip
+  // the draw entirely during the override pass.
   let starDrawCount = STAR_COUNT;
   points.onBeforeRender = (renderer, scene) => {
     geometry.setDrawRange(0, scene.overrideMaterial ? 0 : starDrawCount);

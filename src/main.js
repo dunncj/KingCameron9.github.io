@@ -3,7 +3,9 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { buildScene } from './scene.js';
 import { buildTiles } from './tiles.js';
 import { buildSky } from './sky.js';
-import { buildRain, buildSnow, buildWindStreaks, RAIN_MAX_INTENSITY, SNOW_MAX_INTENSITY } from './weather.js';
+import {
+  createRainField, createSnowField, createWindStreaks, RAIN_MAX_INTENSITY, SNOW_MAX_INTENSITY,
+} from './particles';
 import { buildClouds, CLOUD_FORMATIONS } from './clouds.js';
 import { buildComposer } from './postprocessing.js';
 import { buildPlayerPanel } from './player.js';
@@ -118,9 +120,9 @@ const tiles = buildTiles(camera, renderer);
 scene.add(tiles.group);
 
 // --- Weather particles ---
-const rain = buildRain(scene, settings.rain);
-const snow = buildSnow(scene, settings.snow);
-const windStreaks = buildWindStreaks(scene);
+const rain = createRainField(scene, settings.rain);
+const snow = createSnowField(scene, settings.snow);
+const windStreaks = createWindStreaks(scene);
 const clouds = buildClouds(scene, camera.position);
 
 // --- Postprocessing ---
@@ -615,8 +617,8 @@ function nextWeatherInterval() {
 // Weather presets cross-fade rather than snap: capture where every affected
 // param currently sits, where the new preset wants it, and ease between the
 // two over a few seconds each frame (see updatePresetTransition). Rain/snow
-// specifically fade via `intensity` (weather.js scales opacity by it below
-// 1), and get switched on immediately / off only once the fade-out
+// specifically fade via `intensity` (particles/intensity.ts scales opacity
+// by it below 1), and get switched on immediately / off only once the fade-out
 // finishes, so the particles are actually visible while fading rather than
 // popping in/out at full or zero opacity.
 let presetTransition = null;
@@ -626,7 +628,7 @@ let presetTransition = null;
 // unified transition instead of some parts finishing well before others.
 const PRESET_TRANSITION_DURATION = 10;
 // The very first call (module init, always 'clear') has nothing real to
-// cross-fade *from* — "from" would just be weather.js/scene.js's raw
+// cross-fade *from* — "from" would just be particles/scene.js's raw
 // constructor defaults, which were never actually shown on screen. Cross-
 // fading from them anyway is exactly why rain (and to a lesser extent,
 // clouds) could briefly appear on load before settling to Clear: the
@@ -1223,9 +1225,9 @@ playerPanel = buildPlayerPanel({
 function setLocalViewVisible(visible) {
   tiles.group.visible = visible;
   clouds.mesh.visible = visible;
-  rain.lines.visible = visible;
-  snow.points.visible = visible;
-  windStreaks.mesh.visible = visible;
+  rain.object.visible = visible;
+  snow.object.visible = visible;
+  windStreaks.object.visible = visible;
   sky.sky.visible = visible;
   sky.sunSprite.visible = visible;
   sky.moonSprite.visible = visible;
@@ -2141,10 +2143,11 @@ function tick() {
   snow.params.windDirection = gust.direction;
   windStreaks.params.windSpeed = gust.speed;
   windStreaks.params.windDirection = gust.direction;
-  // setLocalViewVisible(false) sets rain.lines/snow.points/windStreaks.mesh
+  // setLocalViewVisible(false) sets rain.object/snow.object/windStreaks.object
   // .visible = false the instant the overview opens — but each system's own
-  // update() unconditionally does `mesh.visible = params.enabled` (or
-  // `windSpeed > 10`) as its very first line (see weather.js), and
+  // update() unconditionally does `object.visible = params.enabled` (or
+  // `windSpeed > minVisibleWindSpeed`) as its very first line (see
+  // src/particles/), and
   // params.enabled can still be true for as long as PRESET_TRANSITION_
   // DURATION (10s) after a weather roll starts moving away from rain/snow —
   // applyPreset only flips it false at the *end* of that cross-fade. Left
