@@ -378,6 +378,10 @@ export function buildClouds(scene, initialPosition = new THREE.Vector3()) {
       dt, simTime, cameraPosition, windSpeed, windDirection,
       sunColor, ambientColor, nightAmount, coverage, density, formation, levels,
       rainAmount, snowAmount, stormAmount, flash,
+      // Render-quality lever (see src/quality/) — scales how many of the
+      // CLUSTER_COUNT instances a given coverage is even allowed to reach,
+      // on top of (not instead of) coverage's own share. 1 = no reduction.
+      activeFraction = 1,
     } = opts;
     // Clouds are lit (0.5-0.82 base, before any tint) the same regardless of
     // time of day otherwise — against a properly dark night sky that reads
@@ -391,7 +395,9 @@ export function buildClouds(scene, initialPosition = new THREE.Vector3()) {
     // would — 8% of 70 is still 6 whole cluster formations, plainly visible
     // clumps on a "Clear" day. This keeps the high end (Overcast/Storm)
     // close to full while making light weather read as genuinely light.
-    const targetActive = Math.round(CLUSTER_COUNT * THREE.MathUtils.clamp(coverage, 0, 1) ** 1.6);
+    const targetActive = Math.round(
+      CLUSTER_COUNT * THREE.MathUtils.clamp(coverage, 0, 1) ** 1.6 * THREE.MathUtils.clamp(activeFraction, 0, 1),
+    );
     // Lower ceiling than density alone would suggest — solid/opaque clouds
     // at max density read as too prominent/heavy in daylight; capping well
     // under fully opaque keeps even a dense sky looking like cloud, not a

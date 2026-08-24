@@ -13,7 +13,7 @@ import type { Settings } from './types';
 
 const REQUIRED_TOP_LEVEL: (keyof Settings)[] = [
   'sky', 'stars', 'clouds', 'rain', 'snow', 'wind', 'storm', 'postfx', 'pixelArt',
-  'camera', 'transitions', 'prefetch', 'preload', 'cache', 'locations', 'presets', 'weatherGraphs',
+  'camera', 'transitions', 'prefetch', 'preload', 'cache', 'render', 'locations', 'presets', 'weatherGraphs',
 ];
 
 function loadDefaults(): Settings {

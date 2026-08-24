@@ -16,6 +16,8 @@ export interface SnowParams {
   // comment, same reasoning.
   windSpeed?: number;
   windDirection?: number;
+  // Render-quality lever (see src/quality/) — see RainParams' own comment.
+  densityScale?: number;
 }
 
 export interface SnowOptions {
@@ -152,7 +154,7 @@ export function createSnowField(scene: { add(o: Object3D): void }, params: SnowP
     if (!params.enabled) return;
 
     const densityFraction = intensityToDensityFraction(params.intensity, maxIntensity, minDensityFraction);
-    activeCount = Math.floor(maxCount * densityFraction);
+    activeCount = Math.floor(maxCount * densityFraction * (params.densityScale ?? 1));
     geometry.setDrawRange(0, activeCount);
     uniforms.uOpacity.value = baseOpacity * intensityToOpacityFraction(params.intensity);
     uniforms.uIntensityFallScale.value = intensityToSpeedScale(params.intensity);

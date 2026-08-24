@@ -261,6 +261,56 @@ tilesMaxSizeMB = 800
 tilesMaxItems = 7000
 tilesErrorTarget = 10
 
+# --- Render quality -------------------------------------------------------
+# The rendering-cost counterpart to [cache.qualities.*] above — one bundle
+# per tier, shared low/medium/high/epic naming (":quality <name>" sets both
+# this and cache quality together; ":render quality <name>" changes only
+# this one). [render.qualities.high]'s values match every other setting's
+# existing shipped defaults (pixelArt.pixelSize, stars.*) — nothing changes
+# on a normal load. Deliberately limited to knobs that are safe to change
+# live without rebuilding a GPU buffer (particle/cloud pool sizes are fixed
+# at construction; these instead cap how much of that fixed pool is ever
+# actually drawn — see clouds.js's activeFraction and particles/rain.ts's
+# densityScale).
+[render]
+quality = "high"
+
+[render.qualities.low]
+pixelSize = 6
+devicePixelRatioCap = 1
+starDensity = 0.4
+starBrightness = 2.5
+cloudActiveFraction = 0.5
+precipitationDensityScale = 0.4
+windStreaksDensityScale = 0.4
+
+[render.qualities.medium]
+pixelSize = 4
+devicePixelRatioCap = 1.25
+starDensity = 0.65
+starBrightness = 3
+cloudActiveFraction = 0.75
+precipitationDensityScale = 0.7
+windStreaksDensityScale = 0.7
+
+[render.qualities.high]
+pixelSize = 3
+devicePixelRatioCap = 1.5
+starDensity = 0.85
+starBrightness = 3.5
+cloudActiveFraction = 1
+precipitationDensityScale = 1
+windStreaksDensityScale = 1
+
+[render.qualities.epic]
+pixelSize = 2
+devicePixelRatioCap = 2
+starDensity = 1
+starBrightness = 4
+cloudActiveFraction = 1
+precipitationDensityScale = 1
+windStreaksDensityScale = 1
+
 # --- Locations ---------------------------------------------------------
 # position/target are local coordinates only meaningful once the 3D tiles
 # are re-centered at this location's own lat/lon (see tiles.teleport) —

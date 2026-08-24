@@ -13,6 +13,7 @@ import {
   mountUSOverview, TILT_RAD, flyInParams, overviewFlightState, destPrefetchParams, hoverParams,
 } from './usMap.js';
 import { createCacheSystem } from './cache';
+import { createRenderQualitySystem } from './quality';
 import { movementParams, curveOptions } from './flightCurves';
 import { settings, exportSettingsToml } from './settings/store';
 import { buildSettingsCommand } from './settings/commands';
@@ -23,6 +24,7 @@ import { buildTravelCommand } from './commands/travelCommand';
 import { buildControlsCommand } from './commands/controlsCommand';
 import { buildDebugCommand } from './commands/debugCommand';
 import { buildCacheCommand } from './commands/cacheCommand';
+import { buildQualityCommand } from './commands/qualityCommand';
 
 // Every saved location's position/target start as plain {x,y,z} data (TOML
 // has no "point" type — see settings.toml's [locations.*] tables); upgrade
@@ -148,6 +150,28 @@ function syncTilesResolution() {
   tiles.setResolution(camera, size.x / pixelSize, size.y / pixelSize);
 }
 syncTilesResolution();
+
+// Everything downstream of the renderer's actual pixel dimensions — used
+// both by the window 'resize' listener further down and by the render-
+// quality system (see src/quality/), for which a devicePixelRatio change
+// is, as far as the renderer's concerned, indistinguishable from a resize.
+function handleResize() {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  postFx.resize(window.innerWidth, window.innerHeight);
+  syncTilesResolution();
+}
+
+// --- Render quality --- how much rendering cost the site spends: retro-
+// pixelation size, devicePixelRatio, star density/brightness, and (read
+// each frame below) how much of clouds'/rain's/snow's/wind streaks' fixed
+// particle pools actually get drawn. The counterpart to the cache service's
+// cache-quality dial (see src/cache/) — same low/medium/high/epic tiers,
+// switched together by the ":quality" console command below.
+const renderQuality = createRenderQualitySystem({
+  renderer, postFx, pixelArt: settings.pixelArt, stars: settings.stars, render: settings.render, onResize: handleResize,
+});
 
 // --- Weather --- rain/snow/wind streaks (the particles service), wind
 // blur and lightning flash (the postprocessing service), and the state/
@@ -656,6 +680,14 @@ async function buildDevGui() {
     },
   }, 'copySettings').name('Copy All Settings');
 
+  // The unified dial (see src/quality/ and src/cache/, and the ":quality"
+  // console command) — sets render + cache quality together. The
+  // per-quality-system dropdowns further down (Cache & Preload's own
+  // "quality", and Pixel Art's below) stay independently settable for
+  // decoupling the two.
+  gui.add({ quality: renderQuality.getQuality() }, 'quality', renderQuality.qualityOptions())
+    .name('Quality (render + cache)').onChange(qualityControl.setQuality);
+
   const weatherFolder = gui.addFolder('Weather Preset');
   weatherFolder.add({ preset: 'clear' }, 'preset', weather.presetOptions()).name('preset').onChange(weather.applyPreset);
 
@@ -707,6 +739,10 @@ async function buildDevGui() {
 
   const pixelFolder = gui.addFolder('Pixel Art');
   pixelFolder.close();
+  // Render-quality-only switch (see src/quality/) — unlike the top-level
+  // "Quality" dropdown, this leaves cache quality alone.
+  pixelFolder.add({ quality: renderQuality.getQuality() }, 'quality', renderQuality.qualityOptions())
+    .name('render quality').onChange((v) => { renderQuality.setQuality(v); refreshGui(); });
   // Bound to settings.pixelArt (not the pass directly) so
   // ":settings set pixelArt.pixelSize 5" and this slider both drive the
   // same value — onChange pushes it into the actual pass, which doesn't
@@ -818,7 +854,7 @@ async function buildDevGui() {
   // fine-tuned live on top of whichever tier is currently active.
   const preloadFolder = transitionFolder.addFolder('Cache & Preload');
   preloadFolder.add({ quality: cache.getQuality() }, 'quality', cache.qualityOptions())
-    .name('quality').onChange((v) => cache.setQuality(v));
+    .name('quality').onChange(cacheControl.setQuality);
   preloadFolder.add(hoverParams, 'radiusPx', 10, 300, 5).name('hover radius (px)');
   preloadFolder.add(hoverParams, 'debounceMs', 0, 2000, 50).name('hover debounce (ms)');
   preloadFolder.add(cache.params, 'maxConcurrentHeavy', 1, 4, 1).name('max concurrent (hover)');
@@ -1402,10 +1438,30 @@ const weatherControl = {
   setCloudFormation: weather.setCloudFormation,
 };
 
+// Both quality switches write straight into settings.prefetch/.preload/
+// .stars/.pixelArt (live objects several dev-GUI sliders are bound to,
+// same as a weather preset does) — lil-gui only re-reads a bound value
+// into its own display on user interaction, not when something else
+// changes the underlying object, so every switch needs to explicitly
+// nudge every controller to catch up, same as applyPreset already does.
+function refreshGui() {
+  if (gui) gui.controllersRecursive().forEach((c) => c.updateDisplay());
+}
+
 const cacheControl = {
   getQuality: cache.getQuality,
   qualityOptions: cache.qualityOptions,
-  setQuality: cache.setQuality,
+  setQuality: (name) => { cache.setQuality(name); refreshGui(); },
+};
+
+const qualityControl = {
+  getQuality: renderQuality.getQuality,
+  qualityOptions: renderQuality.qualityOptions,
+  setQuality: (name) => {
+    renderQuality.setQuality(name);
+    cache.setQuality(name);
+    refreshGui();
+  },
 };
 
 const starsControl = {
@@ -1462,6 +1518,7 @@ buildDevConsole([
   buildControlsCommand(controlsToggle),
   buildDebugCommand(debugSnapshot),
   buildCacheCommand(cacheControl),
+  buildQualityCommand(qualityControl),
 ]);
 
 // --- Lighting / sky update ---
@@ -1785,13 +1842,7 @@ function updatePostFX(nightAmount) {
 }
 
 // --- Resize ---
-window.addEventListener('resize', () => {
-  camera.aspect = window.innerWidth / window.innerHeight;
-  camera.updateProjectionMatrix();
-  renderer.setSize(window.innerWidth, window.innerHeight);
-  postFx.resize(window.innerWidth, window.innerHeight);
-  syncTilesResolution();
-});
+window.addEventListener('resize', handleResize);
 
 // --- Loop ---
 const clock = new THREE.Clock();
@@ -1908,6 +1959,13 @@ function tick() {
   // `!overviewActive` as weather.updateParticles' `active` flag is what
   // actually makes it stick, immediately, the same way
   // localCameraControl.update()/controls.update() are already skipped there.
+  // Render-quality density scale (see src/quality/) — read fresh every
+  // frame so a live quality switch takes effect on the next update, same
+  // as the wind feed just above it.
+  const precipitationDensityScale = renderQuality.precipitationDensityScale();
+  rain.params.densityScale = precipitationDensityScale;
+  snow.params.densityScale = precipitationDensityScale;
+  windStreaks.params.densityScale = renderQuality.windStreaksDensityScale();
   weather.updateParticles(dt, camera.position, !overviewActive);
 
   const sunDir = updateLighting();
@@ -1934,6 +1992,7 @@ function tick() {
     sunColor: sun.color,
     ambientColor: frameTint,
     nightAmount,
+    activeFraction: renderQuality.cloudActiveFraction(),
   });
   updatePostFX(nightAmount);
 
