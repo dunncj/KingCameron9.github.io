@@ -3,36 +3,20 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Cameron Dunn Personal</title>
-    <!-- <script type="module" crossorigin src="/assets/index-17bea1d1.js"></script> -->
+    <title>Cameron Dunn</title>
+    <!-- The 3D flythrough lives at /world now, not the site root — this is
+         a real static redirect (a genuine /world/index.html file, not a
+         client-side route), since GitHub Pages can't run a history-API SPA
+         router: an arbitrary deep link like /world with no matching file
+         just 404s there. A meta-refresh plus a JS fallback covers browsers
+         either way, and redirects instantly (content="0"). -->
+    <meta http-equiv="refresh" content="0; url=/world/" />
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      body { background: #000; }
+    </style>
   </head>
   <body>
-    <div id="site">
-      <h2>Cameron Dunn</h2>
-      <h4>About me</h4>
-      <p>
-        Hello. My name is Cameron Dunn. I am currently a Senior in high school.
-        I love computers, programming, and all things in between.
-      </p>
-      <h4>Contact</h4>
-      <p>Email: cameron@camerondunn.net</p>
-    </div>
+    <script>location.replace('/world/');</script>
   </body>
-  <style>
-    :host,
-    :root {
-      --rem: 16;
-    }
-    body {
-      line-height: 1.4;
-      font-size: 16px;
-      padding: 0 10px;
-      margin: 50px auto;
-      max-width: 650px;
-    }
-    #site {
-      max-width: 42em;
-      margin: 15 auto;
-    }
-  </style>
 </html>

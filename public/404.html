@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Cameron Dunn</title>
+    <!-- GitHub Pages serves this for ANY unmatched path site-wide — there's
+         no server-side router, so a real deep link like /world/palo-alto
+         404s here even though main.js knows exactly what to do with that
+         path (see syncToPath). Redirects into the real app entry
+         (world/index.html, the only actual file under /world/) with the
+         originally requested path preserved in a query param, which
+         main.js decodes back via history.replaceState before syncToPath
+         reads it — the standard SPA-on-GitHub-Pages redirect trick. -->
+    <script>
+      var requested = location.pathname + location.search + location.hash;
+      location.replace('/world/?redirect=' + encodeURIComponent(requested));
+    </script>
+  </head>
+  <body></body>
+</html>

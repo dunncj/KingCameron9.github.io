@@ -1,0 +1,503 @@
+# Centralized defaults for the whole app — loaded once at startup into a
+# live, mutable tree (see src/settings/store.ts). Every table/key name here
+# is a plain identifier (no spaces), so any of them works as a dot path with
+# the ":settings" console command, e.g. `settings set stars.brightness 100`.
+# Edit this file and reload to change a default; edit a value live instead
+# via the dev GUI or the console, then `settings export` to copy the live
+# tree back out in this same format to make a tweak permanent.
+
+[sky]
+hour = 12
+turbidity = 3
+rayleigh = 0.15
+mieCoefficient = 0.005
+mieDirectionalG = 0.45
+
+[stars]
+density = 0.85
+brightness = 3.5
+
+[clouds]
+coverage = 0.25
+density = 0.5
+scale = 0.0006
+speed = 0.00015
+formation = "puffy"
+levels = 1
+
+[rain]
+enabled = false
+intensity = 1
+
+[snow]
+enabled = false
+intensity = 1
+
+[wind]
+speed = 15
+direction = 45
+streakBlur = 0.08
+
+[wind.shake]
+enabled = true
+amount = 0.6
+
+[storm]
+enabled = false
+
+[postfx]
+exposure = 0.55
+bloomStrength = 0.35
+bloomRadius = 1.3
+bloomThreshold = 0.9
+godRayStrength = 0.35
+vignette = 0.35
+zoomBlurStrength = 0.55
+
+[pixelArt]
+pixelSize = 3
+normalEdgeStrength = 0
+depthEdgeStrength = 0
+
+[camera.move]
+speed = 150
+
+[camera.bob]
+enabled = true
+pattern = "Figure8"
+periodSeconds = 20
+amount = 6
+idleAmount = 1.4
+
+[transitions.handoff]
+startHeight = 500
+descendDuration = 1.2
+
+[transitions.flyIn]
+zoom = 18
+ms = 2200
+panMs = 700
+
+[transitions.movements.panIn]
+curve = "hyperbolic-out"
+speed = 1
+sharpness = 24
+
+[transitions.movements.zoomIn]
+curve = "hyperbolic-in"
+speed = 1
+sharpness = 24
+
+[transitions.movements.zoomOut]
+curve = "hyperbolic-out"
+speed = 1
+sharpness = 24
+
+[transitions.movements.panOut]
+curve = "hyperbolic-in"
+speed = 2
+sharpness = 45
+
+[prefetch.dest.highRes]
+radius = 0
+zoomDrop = 0
+
+[prefetch.dest.medRes]
+radius = 2
+zoomDrop = 2
+
+[prefetch.dest.lowRes]
+radius = 2
+zoomDrop = 5
+
+[prefetch.dest.veryLowRes]
+radius = 1
+zoomDrop = 8
+
+[prefetch.dest]
+edgeFadeStrength = 0.6
+fetchBatchSize = 6
+buildBatchSize = 4
+
+[prefetch.heavy]
+resolutionScale = 0.35
+wideResW = 320
+wideResH = 180
+durationMs = 15000
+staggerMs = 120
+
+[prefetch.hover]
+radiusPx = 90
+debounceMs = 150
+
+[preload]
+clickBackoffMs = 750
+idleDelayMs = 4000
+idleIntervalMs = 6000
+maxConcurrentHeavy = 2
+heavyCooldownMs = 20000
+
+# --- Locations ---------------------------------------------------------
+# position/target are local coordinates only meaningful once the 3D tiles
+# are re-centered at this location's own lat/lon (see tiles.teleport) —
+# see main.js's own comments on PALO_ALTO_VIEW/URBANA_VIEW/etc for how each
+# one was derived. nightBrightness scales how bright stars/moon read at
+# this location — real light pollution varies a lot by where you are.
+
+[locations.paloAlto]
+label = "Palo Alto, CA"
+slug = "palo-alto"
+lat = 37.418084
+lon = -122.145394
+utcOffset = -8
+baseTempF = 62
+nightBrightness = 1.0
+position = { x = 211.96, y = 57.77, z = -2643.21 }
+target = { x = 414.22, y = 165, z = -4736.18 }
+
+[locations.urbana]
+label = "Urbana, IL"
+slug = "urbana"
+lat = 40.109179
+lon = -88.227243
+utcOffset = -6
+baseTempF = 54
+nightBrightness = 1.4
+position = { x = 0, y = 237.1, z = 0 }
+target = { x = 11.05, y = 41.01, z = -921.84 }
+
+[locations.fallsChurch]
+label = "Falls Church, VA"
+slug = "falls-church"
+lat = 38.897236
+lon = -77.190797
+utcOffset = -5
+baseTempF = 58
+nightBrightness = 1.0
+position = { x = 0, y = 125.3, z = 0 }
+target = { x = 340.83, y = 73.07, z = 145.02 }
+
+[locations.chantilly]
+label = "Chantilly, VA"
+slug = "chantilly"
+lat = 38.873825
+lon = -77.441261
+utcOffset = -5
+baseTempF = 56
+nightBrightness = 1.0
+position = { x = 0, y = 91.1, z = 0 }
+target = { x = 145.06, y = 54.74, z = -96.24 }
+
+# --- Weather presets -----------------------------------------------------
+# tempDeltaF nudges a location's own baseTempF for the panel's displayed
+# estimate (see estimatedTempF in main.js). cloudFormation/cloudLevels pick
+# clouds.js's CLOUD_FORMATIONS personality; only coverage/density/fog/wind
+# actually cross-fade when a preset applies (see applyPreset) — the rest
+# switch directly.
+
+[presets.clear]
+label = "Clear"
+coverage = 0.08
+density = 0.2
+fogNear = 2000
+fogFar = 40000
+rain = false
+rainIntensity = 1
+snow = false
+snowIntensity = 1
+wind = 6
+storm = false
+bloom = 0.25
+godray = 0.3
+cloudFormation = "scattered"
+cloudLevels = 1
+tempDeltaF = 8
+
+[presets.partlyCloudy]
+label = "Partly Cloudy"
+coverage = 0.35
+density = 0.3
+fogNear = 1800
+fogFar = 30000
+rain = false
+rainIntensity = 1
+snow = false
+snowIntensity = 1
+wind = 10
+storm = false
+bloom = 0.3
+godray = 0.28
+cloudFormation = "scattered"
+cloudLevels = 2
+tempDeltaF = 4
+
+[presets.cloudy]
+label = "Cloudy"
+coverage = 0.8
+density = 0.25
+fogNear = 1200
+fogFar = 15000
+rain = false
+rainIntensity = 1
+snow = false
+snowIntensity = 1
+wind = 14
+storm = false
+bloom = 0.2
+godray = 0.1
+cloudFormation = "mixed"
+cloudLevels = 2
+tempDeltaF = 0
+
+[presets.overcast]
+label = "Overcast"
+coverage = 0.95
+density = 0.55
+fogNear = 900
+fogFar = 10000
+rain = false
+rainIntensity = 1
+snow = false
+snowIntensity = 1
+wind = 12
+storm = false
+bloom = 0.15
+godray = 0.05
+cloudFormation = "flat"
+cloudLevels = 1
+tempDeltaF = -3
+
+[presets.hazy]
+label = "Hazy"
+coverage = 0.6
+density = 0.12
+fogNear = 700
+fogFar = 6000
+rain = false
+rainIntensity = 1
+snow = false
+snowIntensity = 1
+wind = 4
+storm = false
+bloom = 0.35
+godray = 0.4
+cloudFormation = "flat"
+cloudLevels = 1
+tempDeltaF = 6
+
+[presets.showers]
+label = "Showers"
+coverage = 0.7
+density = 0.28
+fogNear = 1000
+fogFar = 9000
+rain = true
+rainIntensity = 0.45
+snow = false
+snowIntensity = 1
+wind = 14
+storm = false
+bloom = 0.22
+godray = 0.14
+cloudFormation = "scattered"
+cloudLevels = 2
+tempDeltaF = -2
+
+[presets.rain]
+label = "Rain"
+coverage = 0.85
+density = 0.22
+fogNear = 600
+fogFar = 6000
+rain = true
+rainIntensity = 1
+snow = false
+snowIntensity = 1
+wind = 20
+storm = false
+bloom = 0.15
+godray = 0.03
+cloudFormation = "flat"
+cloudLevels = 1
+tempDeltaF = -5
+
+[presets.storm]
+label = "Storm"
+coverage = 0.95
+density = 0.3
+fogNear = 400
+fogFar = 3500
+rain = true
+rainIntensity = 3
+snow = false
+snowIntensity = 1
+wind = 50
+storm = true
+bloom = 0.12
+godray = 0
+cloudFormation = "towering"
+cloudLevels = 2
+tempDeltaF = -8
+
+[presets.clearing]
+label = "Clearing"
+coverage = 0.4
+density = 0.22
+fogNear = 1500
+fogFar = 25000
+rain = false
+rainIntensity = 1
+snow = false
+snowIntensity = 1
+wind = 14
+storm = false
+bloom = 0.35
+godray = 0.32
+cloudFormation = "scattered"
+cloudLevels = 2
+tempDeltaF = 2
+
+[presets.snow]
+label = "Snow"
+coverage = 0.7
+density = 0.22
+fogNear = 500
+fogFar = 5000
+rain = false
+rainIntensity = 1
+snow = true
+snowIntensity = 1
+wind = 6
+storm = false
+bloom = 0.22
+godray = 0.07
+cloudFormation = "flat"
+cloudLevels = 1
+tempDeltaF = -15
+
+[presets.heavySnow]
+label = "Heavy Snow"
+coverage = 0.95
+density = 0.3
+fogNear = 250
+fogFar = 2200
+rain = false
+rainIntensity = 1
+snow = true
+snowIntensity = 2.8
+wind = 22
+storm = false
+bloom = 0.15
+godray = 0.02
+cloudFormation = "flat"
+cloudLevels = 2
+tempDeltaF = -20
+
+[presets.blizzard]
+label = "Blizzard"
+coverage = 0.98
+density = 0.35
+fogNear = 120
+fogFar = 900
+rain = false
+rainIntensity = 1
+snow = true
+snowIntensity = 3
+wind = 90
+storm = false
+bloom = 0.1
+godray = 0
+cloudFormation = "flat"
+cloudLevels = 1
+tempDeltaF = -25
+
+[presets.breezy]
+label = "Breezy"
+coverage = 0.2
+density = 0.2
+fogNear = 1800
+fogFar = 35000
+rain = false
+rainIntensity = 1
+snow = false
+snowIntensity = 1
+wind = 22
+storm = false
+bloom = 0.4
+godray = 0.35
+cloudFormation = "scattered"
+cloudLevels = 1
+tempDeltaF = 2
+
+[presets.windy]
+label = "Windy"
+coverage = 0.5
+density = 0.2
+fogNear = 1500
+fogFar = 25000
+rain = false
+rainIntensity = 1
+snow = false
+snowIntensity = 1
+wind = 65
+storm = false
+bloom = 0.3
+godray = 0.22
+cloudFormation = "streaky"
+cloudLevels = 2
+tempDeltaF = -2
+
+[presets.heavyWind]
+label = "Heavy Wind"
+coverage = 0.75
+density = 0.25
+fogNear = 900
+fogFar = 12000
+rain = false
+rainIntensity = 1
+snow = false
+snowIntensity = 1
+wind = 95
+storm = false
+bloom = 0.22
+godray = 0.15
+cloudFormation = "streaky"
+cloudLevels = 2
+tempDeltaF = -5
+
+# --- Weather transition graphs --------------------------------------------
+# Per-location weighted graph: each node's edges are [presetKey, weight]
+# pairs — where the sky can plausibly go next from here, and how likely
+# each option is relative to the others (see pickWeatherFor in main.js).
+# Palo Alto skews sunny and never sees snow; Urbana leans colder/windier and
+# routes through snow/heavySnow/blizzard instead of rain. Falls Church and
+# Chantilly don't have their own graph — pickWeatherFor falls back to
+# paloAlto's for any location without one.
+
+[weatherGraphs.paloAlto]
+clear = [["partlyCloudy", 5], ["hazy", 3], ["breezy", 2], ["windy", 1]]
+partlyCloudy = [["clear", 4], ["cloudy", 4], ["breezy", 2], ["windy", 1]]
+cloudy = [["partlyCloudy", 3], ["overcast", 3], ["showers", 3], ["windy", 2]]
+overcast = [["cloudy", 3], ["showers", 3], ["rain", 2], ["storm", 1], ["heavyWind", 1]]
+showers = [["rain", 4], ["cloudy", 3], ["clearing", 2], ["partlyCloudy", 1]]
+rain = [["storm", 3], ["clearing", 3], ["showers", 2], ["cloudy", 2]]
+storm = [["rain", 4], ["clearing", 3], ["overcast", 2], ["heavyWind", 1]]
+clearing = [["partlyCloudy", 5], ["clear", 4], ["hazy", 1]]
+hazy = [["clear", 5], ["partlyCloudy", 3], ["breezy", 2]]
+breezy = [["clear", 4], ["windy", 3], ["partlyCloudy", 2], ["heavyWind", 1]]
+windy = [["breezy", 4], ["cloudy", 3], ["heavyWind", 2], ["clear", 1]]
+heavyWind = [["windy", 5], ["storm", 2], ["breezy", 2], ["cloudy", 1]]
+
+[weatherGraphs.urbana]
+clear = [["partlyCloudy", 5], ["windy", 3], ["breezy", 2]]
+partlyCloudy = [["cloudy", 4], ["clear", 4], ["windy", 2]]
+cloudy = [["overcast", 4], ["partlyCloudy", 3], ["snow", 2], ["windy", 1]]
+overcast = [["snow", 4], ["cloudy", 3], ["storm", 2], ["heavySnow", 1]]
+snow = [["heavySnow", 4], ["overcast", 3], ["clearing", 2], ["cloudy", 1]]
+heavySnow = [["snow", 4], ["blizzard", 3], ["overcast", 2], ["clearing", 1]]
+blizzard = [["heavySnow", 6], ["windy", 2], ["overcast", 2]]
+storm = [["overcast", 5], ["heavyWind", 3], ["snow", 2]]
+clearing = [["partlyCloudy", 5], ["clear", 4], ["cloudy", 1]]
+windy = [["breezy", 4], ["heavyWind", 3], ["cloudy", 2], ["blizzard", 1]]
+heavyWind = [["windy", 5], ["blizzard", 3], ["storm", 2]]
+breezy = [["clear", 4], ["windy", 4], ["partlyCloudy", 2]]
