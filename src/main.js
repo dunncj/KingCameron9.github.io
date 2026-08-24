@@ -523,6 +523,17 @@ function estimatedTempF() {
   return baseTempF + weather.tempDeltaF();
 }
 
+// Re-picks weather for whichever location is current from
+// weather.pickLiveWeather — deterministic per real-world hour, so it holds
+// steady across reloads within the same hour instead of re-rolling every
+// time. Tracks which hour bucket it last ran for so tick()'s live branch
+// only needs to call this again once a new real hour actually starts.
+let lastLiveWeatherHourBucket = -1;
+function applyLiveWeather() {
+  lastLiveWeatherHourBucket = Math.floor(Date.now() / (1000 * 60 * 60));
+  weather.applyPreset(weather.pickLiveWeather(currentLocationName));
+}
+
 // There genuinely is no weather in space — but the panel reporting nothing
 // at all up there read as broken, not intentional, so it gets its own
 // deadpan "condition" and a suitably brutal temperature instead of hiding
@@ -547,6 +558,14 @@ let currentLocationName = 'paloAlto';
 const TIME_SPEEDS = [0.05, 0.1, 0.2]; // hours of sim time per real second: slow/normal/fast
 const DEFAULT_SPEED_INDEX = 1;
 let timeSpeed = TIME_SPEEDS[DEFAULT_SPEED_INDEX];
+// 'live' (default): skyParams.hour tracks the real wall clock and weather
+// is re-picked from what's plausible right now (see applyLiveWeather) —
+// every location opens showing its own actual local time and today's
+// real-ish weather. 'sim': the pre-existing fast-forward simulation —
+// timeSpeed-accelerated clock, weather auto-rolling randomly along each
+// location's graph. The player panel's Time button (see player.js) and the
+// hidden console's "time live"/"time sim" toggle between them.
+let timeMode = 'live';
 // Set from the ":" console's "time freeze"/"time run" — this is the single
 // master pause for the whole simulation, not just the clock. The render
 // loop forces `dt` to 0 for every simulation update while this is true, so
@@ -633,7 +652,10 @@ async function buildDevGui() {
   weatherFolder.add({ preset: 'clear' }, 'preset', weather.presetOptions()).name('preset').onChange(weather.applyPreset);
 
   const skyFolder = gui.addFolder('Sky & Time');
-  skyFolder.add(skyParams, 'hour', 0, 24, 0.05).name('time of day');
+  // Dragging this only to have live mode overwrite it next frame would read
+  // as broken, so touching it kicks the sim out of live mode the same way
+  // the console's "time set" does (see clockControl.setHour).
+  skyFolder.add(skyParams, 'hour', 0, 24, 0.05).name('time of day').onChange(() => { timeMode = 'sim'; });
   skyFolder.add(skyParams, 'turbidity', 1, 20, 0.1);
   skyFolder.add(skyParams, 'rayleigh', 0, 0.5, 0.005);
   skyFolder.add(skyParams, 'mieCoefficient', 0, 0.02, 0.0005);
@@ -847,7 +869,11 @@ async function buildDevGui() {
 // via the ":" console's "controls" command.
 let navEnabled = false;
 
-weather.applyPreset('clear');
+// Boots in live mode (see timeMode's declaration) — auto-roll only matters
+// once something switches into sim mode (see setTimeMode), where runAuto()
+// re-arms it.
+weather.freezeAuto();
+applyLiveWeather();
 
 // --- Locations --- one source of truth for each place's lat/lon and saved
 // camera pose, shared by the globe overview's markers, the background
@@ -972,7 +998,12 @@ function onArriveAt(name, { push = true } = {}) {
   const cfg = LOCATION_CONFIGS[name];
   clouds.recenter(cfg.position);
   currentLocationName = name;
-  weather.applyPreset(weather.pickNextPreset(currentLocationName));
+  // Live mode: this location's own actual weather right now. Sim mode: keep
+  // random-walking from wherever the fast-forwarded weather already was —
+  // resetAutoRollTimer either way, so a fresh arrival that's already in sim
+  // mode doesn't immediately re-roll again a moment later.
+  if (timeMode === 'live') applyLiveWeather();
+  else weather.applyPreset(weather.pickNextPreset(currentLocationName));
   weather.resetAutoRollTimer();
   // Every arrival lands in local view, whichever path got it here — a
   // deep link straight to a location (see syncToPath) never goes through
@@ -1027,18 +1058,49 @@ function matchLocationName(raw) {
   return Object.keys(LOCATION_CONFIGS).find((k) => LOCATION_CONFIGS[k].slug === slug);
 }
 
+// Switches between 'live' (real local time + today's real-ish weather) and
+// 'sim' (the fast-forward simulation) — the single entry point for every
+// path that can change modes: the player panel's Time button, the hidden
+// console's "time live"/"time sim", and the dev GUI forcing sim on manual
+// overrides. Keeps the panel's button in sync even when the mode changed
+// from one of those other paths instead of its own click.
+function setTimeMode(mode, speedValue) {
+  if (mode === 'sim' && timeMode === 'live') {
+    // Live mode stores skyParams.hour as this location's own already-local
+    // hour (see tick()); sim mode's display/render both expect it back in
+    // the "shift by utcOffset only for display" convention the simulation
+    // has always used. Converting once here keeps the switch visually
+    // continuous — the rendered sky and the readout hold steady at the
+    // instant of the click instead of jumping by utcOffset hours — free to
+    // diverge from real time afterward, which is the whole point.
+    const utcOffset = overviewActive ? 0 : (LOCATION_CONFIGS[currentLocationName]?.utcOffset ?? 0);
+    skyParams.hour = (skyParams.hour - utcOffset + 24) % 24;
+  }
+  timeMode = mode;
+  if (mode === 'sim') {
+    if (speedValue !== undefined) timeSpeed = speedValue;
+    weather.runAuto();
+  } else {
+    weather.freezeAuto();
+    applyLiveWeather();
+  }
+  playerPanel?.setMode(timeMode, TIME_SPEEDS.indexOf(timeSpeed));
+}
+
 // --- User-facing panel (bottom-right): reports weather, temperature, and
 // time (converted to whichever location you're at, or world/UTC time in
-// space — see updatePlayerPanelStatus), plus how fast time passes. No
-// location picker — traveling is a console command (see commands/travelCommand.ts).
+// space — see updatePlayerPanelStatus), plus a way to leave live mode and
+// fast-forward. No location picker — traveling is a console command (see
+// commands/travelCommand.ts).
 playerPanel = buildPlayerPanel({
   initialWeather: weather.presetLabel(weather.getCurrentPresetName()),
   initialTempF: estimatedTempF(),
   initialHour: skyParams.hour,
   initialTimeLabel: 'Local Time',
   speedOptions: TIME_SPEEDS,
+  initialMode: timeMode,
   initialSpeedIndex: DEFAULT_SPEED_INDEX,
-  onSpeedChange: (value) => { timeSpeed = value; },
+  onModeChange: setTimeMode,
 });
 
 // The landing experience is the pixelated globe overview — one continuous
@@ -1274,9 +1336,14 @@ syncToPath();
 // uniform or a WebGL draw call somewhere downstream and freezing the frame.
 const clockControl = {
   getHour: () => skyParams.hour,
-  setHour: (hour) => { skyParams.hour = hour; },
+  // A manual hour is a sim-mode override — left in live mode, tick() would
+  // just overwrite it with the real clock again next frame.
+  setHour: (hour) => { setTimeMode('sim', timeSpeed); skyParams.hour = hour; },
   getSpeed: () => timeSpeed,
-  setSpeed: (v) => { timeSpeed = v; },
+  setSpeed: (v) => { setTimeMode('sim', v); },
+  getMode: () => timeMode,
+  setLive: () => setTimeMode('live'),
+  setSim: () => setTimeMode('sim', timeSpeed),
   freeze: () => {
     timeFrozen = true;
     // This is the master pause, not just the clock — see the comment by
@@ -1347,7 +1414,7 @@ const controlsToggle = {
 
 const debugSnapshot = {
   snapshot: () => ({
-    hour: skyParams.hour, timeSpeed, currentLocationName, currentPresetName: weather.getCurrentPresetName(),
+    hour: skyParams.hour, timeMode, timeSpeed, currentLocationName, currentPresetName: weather.getCurrentPresetName(),
     starOpacity: sky.stars.material.opacity,
     starDrawRange: sky.stars.geometry.drawRange,
     sunOpacity: sky.sunSprite.material.opacity,
@@ -1737,29 +1804,60 @@ function tick() {
   if (!updateFlight(dt) && !overviewActive) applyMovement(dt);
   weather.updateGust(dt);
 
-  const hourSpeed = timeSpeed * (isDeepNight(skyParams.hour) ? DEEP_NIGHT_SPEED_MULTIPLIER : 1);
-  skyParams.hour = (skyParams.hour + hourSpeed * dt) % 24;
-  // skyParams.hour is one shared clock for the whole session (it never
-  // resets or shifts on arrival) — treated as world/UTC time, converted to
-  // whichever location you're actually standing in via its own utcOffset
-  // (see LOCATION_CONFIGS), or shown as-is, labeled UTC, from space where
-  // no single location's time would make sense.
+  if (timeMode === 'live') {
+    // Reads Date.now() directly rather than integrating dt — dt only covers
+    // time this tab was actually open/foregrounded, which would drift from
+    // the real clock the moment the tab was backgrounded or the machine
+    // slept. timeFrozen still applies here too (console "time freeze" is
+    // the whole-simulation pause, live mode included), so it holds at
+    // whatever real moment freeze was hit instead of jumping ahead the
+    // instant it's lifted.
+    //
+    // Unlike sim mode, this sets skyParams.hour to the CURRENT location's
+    // own real local hour, not raw UTC — the sun/star rendering below reads
+    // skyParams.hour directly with no per-location shift of its own (see
+    // SUNRISE_HOUR/SUNSET_HOUR azimuth math), so a real Palo Alto afternoon
+    // needs an actual afternoon hour value to render as daylight, not a
+    // "world clock" that happens to read as UTC night. Only the overview
+    // (no single location) falls back to plain UTC, matching its "World
+    // Time (UTC)" label below.
+    if (!timeFrozen) {
+      const now = new Date();
+      const utcHour = now.getUTCHours() + now.getUTCMinutes() / 60 + now.getUTCSeconds() / 3600;
+      const utcOffset = overviewActive ? 0 : (LOCATION_CONFIGS[currentLocationName]?.utcOffset ?? 0);
+      skyParams.hour = (utcHour + utcOffset + 24) % 24;
+      const hourBucket = Math.floor(now.getTime() / (1000 * 60 * 60));
+      if (hourBucket !== lastLiveWeatherHourBucket) applyLiveWeather();
+    }
+  } else {
+    const hourSpeed = timeSpeed * (isDeepNight(skyParams.hour) ? DEEP_NIGHT_SPEED_MULTIPLIER : 1);
+    skyParams.hour = (skyParams.hour + hourSpeed * dt) % 24;
+    // sim hours, not real seconds — ties how often weather changes to the
+    // world's own clock (including night running faster) instead of a real-
+    // world timer that kept rolling regardless of how fast or slow time was
+    // actually passing.
+    if (weather.tickAutoRoll(hourSpeed * dt)) {
+      weather.applyPreset(weather.pickNextPreset(currentLocationName));
+    }
+  }
+  // Sim mode: skyParams.hour is one shared clock for the whole session (it
+  // never resets or shifts on arrival) — treated as world/UTC time,
+  // converted to whichever location you're actually standing in via its own
+  // utcOffset for display. Live mode: skyParams.hour is already that
+  // location's real local hour (see above), so the panel shows it as-is.
+  // Both: shown raw, labeled UTC, from space where no single location's
+  // time would make sense.
   if (playerPanel) {
     if (overviewActive) {
       playerPanel.setTime(skyParams.hour, 'World Time (UTC)');
+    } else if (timeMode === 'live') {
+      playerPanel.setTime(skyParams.hour, 'Local Time');
     } else {
       const utcOffset = LOCATION_CONFIGS[currentLocationName]?.utcOffset ?? 0;
       playerPanel.setTime((skyParams.hour + utcOffset + 24) % 24, 'Local Time');
     }
   }
 
-  // sim hours, not real seconds — ties how often weather changes to the
-  // world's own clock (including night running faster) instead of a real-
-  // world timer that kept rolling regardless of how fast or slow time was
-  // actually passing.
-  if (weather.tickAutoRoll(hourSpeed * dt)) {
-    weather.applyPreset(weather.pickNextPreset(currentLocationName));
-  }
   weather.updatePresetTransition(dt);
 
   // setLocalViewVisible(false) sets rain.object/snow.object/windStreaks.object

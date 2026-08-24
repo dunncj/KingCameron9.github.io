@@ -77,6 +77,7 @@ export interface WeatherSystem {
   setCloudFormation(v: string): void;
   applyPreset(name: string): void;
   pickNextPreset(locationKey: string): string;
+  pickLiveWeather(locationKey: string): string;
   graphSummary(locationKey: string, locationLabel: string): string;
   setChangeIntervalHours(hours: number): void;
   freezeAuto(): void;
@@ -195,6 +196,7 @@ export function createWeatherSystem(deps: WeatherSystemDeps): WeatherSystem {
     setCloudFormation: presetSystem.setCloudFormation,
     applyPreset: presetSystem.applyPreset,
     pickNextPreset: presetSystem.pickNextPreset,
+    pickLiveWeather: presetSystem.pickLiveWeather,
     graphSummary: presetSystem.graphSummary,
     setChangeIntervalHours: presetSystem.setChangeIntervalHours,
     freezeAuto: presetSystem.freezeAuto,

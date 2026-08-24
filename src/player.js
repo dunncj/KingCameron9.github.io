@@ -1,8 +1,10 @@
 // A polished, user-facing control panel — distinct from the raw dev GUI
 // (lil-gui), which stays available behind the "Menu" toggle for tuning
-// individual parameters. Weather and time of day just happen on their own
-// here; this panel only reports them and lets a visitor pick a location or
-// how fast time passes — not what the weather or hour actually is.
+// individual parameters. By default the site tracks real local time and
+// today's real-ish weather for whatever location you're at (see main.js's
+// "live" timeMode); this panel reports that, and its one control lets a
+// visitor leave live mode and fast-forward through the simulated
+// day/weather cycle instead — not what the weather or hour actually is.
 
 const STYLE = /* css */`
   .player-panel {
@@ -102,6 +104,11 @@ const STYLE = /* css */`
     opacity: 1;
     color: #6cc7ff;
   }
+  .player-speed-live-label {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+  }
   .player-status-row {
     display: flex;
     align-items: baseline;
@@ -124,15 +131,21 @@ function injectStyleOnce() {
 
 function formatHour(hour) {
   const h24 = ((hour % 24) + 24) % 24;
-  const period = h24 < 12 ? 'AM' : 'PM';
-  let h12 = Math.floor(h24) % 12;
+  // Rounds in total-minutes space, not hour-then-minutes separately —
+  // rounding hour and minute parts independently let a value like 5.999h
+  // floor to "5" for the hour but round its 59.9something minutes up to a
+  // literal "60", instead of rolling over into "6:00".
+  const totalMinutes = Math.round(h24 * 60) % (24 * 60);
+  const period = totalMinutes < 12 * 60 ? 'AM' : 'PM';
+  let h12 = Math.floor(totalMinutes / 60) % 12;
   if (h12 === 0) h12 = 12;
-  const minutes = Math.round((h24 - Math.floor(h24)) * 60);
+  const minutes = totalMinutes % 60;
   return `${h12}:${String(minutes).padStart(2, '0')} ${period}`;
 }
 
 // opts: { initialWeather, initialTempF, initialHour, initialTimeLabel,
-//         speedOptions: number[], initialSpeedIndex, onSpeedChange(value) }
+//         speedOptions: number[], initialMode: 'live'|'sim', initialSpeedIndex,
+//         onModeChange(mode, speedValue?) }
 // No location picker here — traveling is a console command now (see
 // commands/travelCommand.ts's "travel" — the panel only ever reported
 // state, it never needed to be the place that changes it), so main.js owns
@@ -194,10 +207,12 @@ export function buildPlayerPanel(opts) {
 
   body.appendChild(statusSection);
 
-  // --- Time speed: the one dial visitors get over time/weather — a single
-  // button that cycles through the levels rather than a row to choose from.
+  // --- Time: the one dial visitors get over time/weather — a single button
+  // that cycles between "Live" (real local time + today's real-ish weather,
+  // the default) and increasingly fast simulated speeds, wrapping back to
+  // Live rather than a separate button for it.
   const speedSection = document.createElement('div');
-  speedSection.innerHTML = '<div class="player-section-label">Time Speed</div>';
+  speedSection.innerHTML = '<div class="player-section-label">Time</div>';
   const speedRow = document.createElement('div');
   speedRow.className = 'player-row';
   // Fixed-size button, Cities: Skylines-style: every level's arrow is always
@@ -206,6 +221,10 @@ export function buildPlayerPanel(opts) {
   // previous '→'.repeat(n) approach resized the button on every click.
   const speedBtn = document.createElement('button');
   speedBtn.className = 'player-btn player-speed-btn';
+  const liveLabel = document.createElement('span');
+  liveLabel.className = 'player-speed-live-label';
+  liveLabel.textContent = 'LIVE';
+  speedBtn.appendChild(liveLabel);
   const speedArrows = opts.speedOptions.map(() => {
     const arrow = document.createElement('span');
     arrow.className = 'player-speed-arrow';
@@ -213,16 +232,27 @@ export function buildPlayerPanel(opts) {
     speedBtn.appendChild(arrow);
     return arrow;
   });
-  let speedIndex = opts.initialSpeedIndex;
+  // -1 = live, 0..speedOptions.length-1 = which simulated speed is active.
+  let speedIndex = opts.initialMode === 'sim' ? (opts.initialSpeedIndex ?? 0) : -1;
   const renderSpeedBtn = () => {
-    speedArrows.forEach((arrow, i) => arrow.classList.toggle('active', i <= speedIndex));
-    speedBtn.setAttribute('aria-label', `time speed ${speedIndex + 1} of ${opts.speedOptions.length}, click to change`);
+    const isLive = speedIndex === -1;
+    liveLabel.style.display = isLive ? '' : 'none';
+    speedArrows.forEach((arrow, i) => {
+      arrow.style.display = isLive ? 'none' : '';
+      arrow.classList.toggle('active', !isLive && i <= speedIndex);
+    });
+    speedBtn.classList.toggle('active', isLive);
+    speedBtn.setAttribute('aria-label', isLive
+      ? 'Live — real local time and weather. Click to fast-forward.'
+      : `Fast-forward speed ${speedIndex + 1} of ${opts.speedOptions.length}, click to change`);
   };
   renderSpeedBtn();
   speedBtn.addEventListener('click', () => {
-    speedIndex = (speedIndex + 1) % opts.speedOptions.length;
+    speedIndex += 1;
+    if (speedIndex >= opts.speedOptions.length) speedIndex = -1;
     renderSpeedBtn();
-    opts.onSpeedChange(opts.speedOptions[speedIndex]);
+    if (speedIndex === -1) opts.onModeChange('live');
+    else opts.onModeChange('sim', opts.speedOptions[speedIndex]);
   });
   speedRow.appendChild(speedBtn);
   speedSection.appendChild(speedRow);
@@ -239,6 +269,13 @@ export function buildPlayerPanel(opts) {
     setTime: (h, label) => {
       timeValue.textContent = formatHour(h);
       timeLabelEl.textContent = label;
+    },
+    // Keeps the button in sync when the mode changes from somewhere other
+    // than this button itself — the hidden console's "time live"/"time sim"
+    // commands, or the dev GUI's raw hour slider forcing sim mode.
+    setMode: (mode, speedIdx = 0) => {
+      speedIndex = mode === 'live' ? -1 : speedIdx;
+      renderSpeedBtn();
     },
   };
 }

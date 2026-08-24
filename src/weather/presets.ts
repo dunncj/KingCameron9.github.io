@@ -59,6 +59,7 @@ export interface PresetSystem {
   applyPreset(name: string): void;
   updatePresetTransition(dt: number): void;
   pickNextPreset(locationKey: string): string;
+  pickLiveWeather(locationKey: string): string;
   graphSummary(locationKey: string, locationLabel: string): string;
   tickAutoRoll(simHoursDelta: number): boolean;
   resetAutoRollTimer(): void;
@@ -244,6 +245,23 @@ export function createPresetSystem(deps: PresetSystemDeps): PresetSystem {
     return options[options.length - 1]?.[0] ?? currentPresetName;
   }
 
+  // "Live" mode (see main.js's timeMode) wants a plausible weather pick for
+  // *right now*, not a random walk from wherever the sim last left off —
+  // deterministic per location+real-hour (same hash approach as
+  // weather-api/server.js's exampleWeatherFor) so it reads as "today's
+  // weather" rather than re-rolling on every reload within the same hour,
+  // while still only ever picking something that location's own graph
+  // considers plausible (Palo Alto never lands on snow, Urbana can).
+  function pickLiveWeather(locationKey: string): string {
+    const graph = resolveGraph(locationKey);
+    const keys = Object.keys(graph);
+    const hourBucket = Math.floor(Date.now() / (1000 * 60 * 60));
+    const seed = `${locationKey}-${hourBucket}`;
+    let hash = 0;
+    for (let i = 0; i < seed.length; i++) hash = (hash * 31 + seed.charCodeAt(i)) >>> 0;
+    return keys[hash % keys.length] ?? currentPresetName;
+  }
+
   function graphSummary(locationKey: string, locationLabel: string): string {
     const graph = resolveGraph(locationKey);
     const edges = graph[currentPresetName];
@@ -279,6 +297,7 @@ export function createPresetSystem(deps: PresetSystemDeps): PresetSystem {
     applyPreset,
     updatePresetTransition,
     pickNextPreset,
+    pickLiveWeather,
     graphSummary,
     tickAutoRoll,
     resetAutoRollTimer: () => { autoWeatherTimer = nextWeatherInterval(); },

@@ -9,6 +9,9 @@ export interface ClockControl {
   setHour(hour: number): void;
   getSpeed(): number;
   setSpeed(hoursPerSec: number): void;
+  getMode(): 'live' | 'sim';
+  setLive(): void;
+  setSim(): void;
   freeze(): void;
   run(): void;
 }
@@ -16,21 +19,29 @@ export interface ClockControl {
 export function buildTimeCommand(clock: ClockControl): Command {
   return {
     name: 'time',
-    description: 'control the day-night clock: "set <hour>", "speed <hoursPerSec>", "freeze", "run"',
+    description: 'control the day-night clock: "set <hour>", "speed <hoursPerSec>", "live", "sim", "freeze", "run"',
     args: [
-      { type: 'enum', name: 'action', values: ['set', 'speed', 'freeze', 'run'] },
+      { type: 'enum', name: 'action', values: ['set', 'speed', 'live', 'sim', 'freeze', 'run'] },
       { type: 'rest', name: 'value', optional: true },
     ],
     run: ([action, value]: ArgValue[]) => {
       if (action === 'set') {
         const hour = parseNumber(value as string | undefined, 'hour', 0, 24);
         clock.setHour(hour % 24);
-        return `hour = ${clock.getHour().toFixed(2)}`;
+        return `hour = ${clock.getHour().toFixed(2)} (mode = sim)`;
       }
       if (action === 'speed') {
         const speed = parseNumber(value as string | undefined, 'hoursPerSec', 0.001);
         clock.setSpeed(speed);
-        return `timeSpeed = ${clock.getSpeed()}`;
+        return `timeSpeed = ${clock.getSpeed()} (mode = sim)`;
+      }
+      if (action === 'live') {
+        clock.setLive();
+        return 'mode = live (real local time and weather)';
+      }
+      if (action === 'sim') {
+        clock.setSim();
+        return `mode = sim (fast-forward), timeSpeed = ${clock.getSpeed()}`;
       }
       if (action === 'freeze') {
         clock.freeze();
@@ -38,7 +49,7 @@ export function buildTimeCommand(clock: ClockControl): Command {
       }
       // action === 'run'
       clock.run();
-      return 'time = running';
+      return `time = running (mode = ${clock.getMode()})`;
     },
   };
 }
