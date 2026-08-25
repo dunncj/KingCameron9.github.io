@@ -6,13 +6,17 @@
 // targeting a CSS background-image instead of a THREE.Texture) gives it
 // the same hard, stepped edges as everything else instead.
 //
-// Computed from real circle distance math, not hand-placed pixels — a
-// hand-authored pin shape tried earlier looked reasonable row-by-row but
-// rendered as a jagged diamond once drawn, so per-row pixel guessing isn't
-// trustworthy even for a shape this simple.
-const DOT_RADIUS = 4;
-const OUTLINE_THICKNESS = 1;
-const DOT_SIZE = DOT_RADIUS * 2 + 1;
+// A literal 4x4 mask, not computed circle math — a 2x2 white core with a
+// 1px-deep border, corners omitted so the border reads as a diamond/plus
+// ring rather than a solid square. '.' = transparent, 'r' = border,
+// 'w' = core.
+const DOT_MASK = [
+  '.rr.',
+  'rwwr',
+  'rwwr',
+  '.rr.',
+];
+const DOT_SIZE = DOT_MASK.length;
 
 export interface DotIconOptions {
   fill?: string;
@@ -25,8 +29,8 @@ export interface DotIconOptions {
 // fixed location markers).
 export function createPixelDotIconUrl({
   fill = '#ffffff',
-  outline = '#ff5a3c',
-  scale = 1,
+  outline = '#8b0000',
+  scale = 3,
 }: DotIconOptions = {}): { url: string; size: number } {
   const canvas = document.createElement('canvas');
   canvas.width = DOT_SIZE;
@@ -35,14 +39,12 @@ export function createPixelDotIconUrl({
   if (!ctx) return { url: '', size: DOT_SIZE * scale };
 
   ctx.imageSmoothingEnabled = false;
-  const c = DOT_RADIUS;
   for (let y = 0; y < DOT_SIZE; y++) {
-    const dy = y - c;
+    const row = DOT_MASK[y]!;
     for (let x = 0; x < DOT_SIZE; x++) {
-      const dx = x - c;
-      const dist = Math.sqrt(dx * dx + dy * dy);
-      if (dist > DOT_RADIUS) continue;
-      ctx.fillStyle = dist > DOT_RADIUS - OUTLINE_THICKNESS ? outline : fill;
+      const cell = row[x];
+      if (cell === '.') continue;
+      ctx.fillStyle = cell === 'r' ? outline : fill;
       ctx.fillRect(x, y, 1, 1);
     }
   }
