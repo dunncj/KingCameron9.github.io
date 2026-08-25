@@ -174,16 +174,16 @@ export function createMarkerOverlay(
       const offset = placement?.offset ?? { x: -entry.labelWidth / 2, y: 6 };
       entry.labelEl.style.transform = `translate(${offset.x}px, ${offset.y}px)`;
 
-      if (placement?.needsConnector) {
-        const { x: tx, y: ty } = placement.connectorTo;
-        const length = Math.hypot(tx, ty);
-        const angleDeg = (Math.atan2(ty, tx) * 180) / Math.PI;
-        entry.connectorEl.style.width = `${length}px`;
-        entry.connectorEl.style.transform = `rotate(${angleDeg}deg)`;
-        entry.connectorEl.style.display = 'block';
-      } else {
-        entry.connectorEl.style.display = 'none';
-      }
+      // Always drawn, not just when layoutLabels() had to push the label
+      // out of its default spot — a bare gap between pin and tag read as
+      // the two being unrelated rather than as one marker.
+      const connectorTo = placement?.connectorTo ?? { x: offset.x, y: offset.y };
+      const { x: tx, y: ty } = connectorTo;
+      const length = Math.hypot(tx, ty);
+      const angleDeg = (Math.atan2(ty, tx) * 180) / Math.PI;
+      entry.connectorEl.style.width = `${length}px`;
+      entry.connectorEl.style.transform = `rotate(${angleDeg}deg)`;
+      entry.connectorEl.style.display = 'block';
     }
   }
 

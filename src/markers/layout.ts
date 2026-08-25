@@ -27,9 +27,11 @@ export interface LabelPlacement {
   // no centering math of its own, since which edge/corner is "centered"
   // depends on which of the four directions below was actually chosen.
   offset: Point;
-  needsConnector: boolean;
   // Nearest point on the label's box to the pin, relative to the pin's
-  // anchor — where a leader line (when drawn) should end.
+  // anchor — where the leader line service.ts always draws should end.
+  // Drawn even at the default (below) position, not just when a collision
+  // pushed the label somewhere else — without it the tag reads as an
+  // unrelated floating label rather than something attached to its pin.
   connectorTo: Point;
 }
 
@@ -113,11 +115,9 @@ export function layoutLabels(candidates: LabelCandidate[]): LabelPlacement[] {
     };
     placedBoxes.push(box);
 
-    const isDefault = chosen.x === options[0]!.x && chosen.y === options[0]!.y;
     placements.push({
       id: c.id,
       offset: chosen,
-      needsConnector: !isDefault,
       connectorTo: nearestPointOnBox({
         x: chosen.x, y: chosen.y, w: c.width, h: c.height,
       }),

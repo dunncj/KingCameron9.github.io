@@ -1185,16 +1185,17 @@ export function mountUSOverview({
 
   // --- Input -----------------------------------------------------------------
   // Zooming in is far more perceptible per zoom-level than zooming out (each
-  // level roughly doubles magnification), so it gets its own, much gentler
-  // sensitivity — scrolling out stays responsive, scrolling in eases in
-  // slowly instead of overshooting several levels in one flick.
-  // Raised well past the old 0.0005/0.0022/0.08 — those capped a single
-  // flick's *total* eventual displacement (maxSpeed / damping, integrated
-  // over the whole decay) at roughly 0.01 zoom levels out of a ~19-level
-  // (minZoom..maxZoom) range, which read as barely responding at all to
-  // anything short of a long sustained trackpad swipe.
-  const WHEEL_ZOOM_IN_SENSITIVITY = 0.0015;
-  const WHEEL_ZOOM_OUT_SENSITIVITY = 0.0055;
+  // level roughly doubles magnification), so it gets its own, gentler
+  // sensitivity — scrolling out stays responsive, scrolling in eases in a
+  // bit slower instead of overshooting several levels in one flick.
+  // A single flick's *total* eventual displacement is bounded by
+  // maxSpeed / damping (the velocity's full exponential decay, integrated) —
+  // with maxSpeed 0.22 that ceiling was only ~0.03 zoom levels out of the
+  // ~19-level (minZoom..maxZoom) range, so even a strong flick barely
+  // registered. maxSpeed (below) is what actually needed raising to fix
+  // that; sensitivity here just controls how quickly one flick reaches it.
+  const WHEEL_ZOOM_IN_SENSITIVITY = 0.004;
+  const WHEEL_ZOOM_OUT_SENSITIVITY = 0.008;
 
   // Same "flick and glide" primitive the local ground view's dolly-zoom
   // uses (see camera/scrollVelocity.ts) — one wheel flick keeps easing for
@@ -1202,8 +1203,11 @@ export function mountUSOverview({
   // deltaY. The in/out sensitivity asymmetry (see the comment this used to
   // sit next to) is applied before the impulse goes in, so the shared
   // primitive itself stays direction-agnostic — sensitivity here is 1, a
-  // pure passthrough.
-  const zoomVelocity = createScrollVelocity({ sensitivity: 1, damping: 7, maxSpeed: 0.22 });
+  // pure passthrough. maxSpeed raised from 0.22 to 0.9 (~4x) — that's the
+  // actual ceiling on how far a single flick can move the zoom level (see
+  // the sensitivity comment above); nothing short of this made a strong
+  // flick feel like it was doing much on a 19-level range.
+  const zoomVelocity = createScrollVelocity({ sensitivity: 1, damping: 7, maxSpeed: 0.9 });
   let zoomRaf = null;
   // The cursor position onWheel last fired at — stepZoomVelocity below
   // keeps re-centering on this every eased frame of the glide, not just

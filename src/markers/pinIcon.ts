@@ -11,23 +11,26 @@
 // classic pin silhouette (round head with a punched-out hole, tapering to
 // a point) needs asymmetric, hand-placed pixels a formula won't produce
 // cleanly at this size.
-const PIN_WIDTH = 9;
+const PIN_WIDTH = 11;
 const PIN_HEIGHT = 10;
 // Row-by-row fill mask, top to bottom — one string per row, one character
 // per pixel column. '.' = transparent, 'o' = outline/hole (same color —
 // the hole reads as a clean punch-through, not a softer inner shadow),
-// 'f' = fill.
+// 'f' = fill. The head is wide enough (11px) to fit a hole that's the
+// same number of rows tall as it is columns wide — narrower masks read as
+// an oval, since a hole only 3 rows tall can't look round at 5 columns
+// wide.
 const PIN_MASK = [
-  '...ooo...',
-  '..offfo..',
-  '.offfffo.',
-  'offoooffo',
-  'ofooooofo',
-  'offoooffo',
-  '.offfffo.',
-  '..offfo..',
-  '...ofo...',
-  '....o....',
+  '..offfffo..',
+  '.offfffffo.',
+  '.offfofffo.',
+  'offfooofffo',
+  'offoooooffo',
+  'offfooofffo',
+  '.offfofffo.',
+  '...offfo...',
+  '....ofo....',
+  '.....o.....',
 ];
 
 export interface PinIconOptions {
