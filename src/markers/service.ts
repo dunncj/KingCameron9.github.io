@@ -43,6 +43,7 @@ const LABEL_BORDER = 'rgba(255,255,255,0.25)';
 const LABEL_BORDER_HOVER = 'rgba(255,255,255,0.7)';
 const CONNECTOR_COLOR = 'rgba(255,255,255,0.5)';
 const CONNECTOR_COLOR_HOVER = 'rgba(255,255,255,0.95)';
+const DOT_OUTLINE_HOVER = '#ffb347';
 
 export function createMarkerOverlay(
   container: HTMLElement,
@@ -50,6 +51,10 @@ export function createMarkerOverlay(
   onSelect: (id: string) => void,
 ): MarkerOverlay {
   const dot = createPixelDotIconUrl();
+  // A second bitmap, not a CSS filter — swapping to a differently-colored
+  // baked pixel-art image keeps the exact same crisp, hard-edged look on
+  // hover; a filter (brightness/saturate) would soften those edges.
+  const dotHover = createPixelDotIconUrl({ outline: DOT_OUTLINE_HOVER });
 
   // Two flat layers instead of one wrapper-per-marker: every marker's pin
   // lives in the lower layer, every marker's label+connector in the upper
@@ -141,11 +146,13 @@ export function createMarkerOverlay(
 
     // Hovering either half highlights both — they read as one marker, so
     // the reaction shouldn't depend on which part the cursor happens to be
-    // over. Only the label (bold text, brighter border/background) and its
-    // leader line react; the dot itself stays put — it scaled up in an
-    // earlier pass and didn't read well, so it's excluded here on purpose.
+    // over. The dot swaps to a brighter-outlined bitmap (no resizing — it
+    // scaled up in an earlier pass and didn't read well). The label's
+    // border/background brighten too, but font-weight stays fixed: toggling
+    // it changes the text's rendered width, which resized the label's box
+    // on every hover and read as a jitter rather than a highlight.
     const setHovered = (hovered: boolean) => {
-      labelEl.style.fontWeight = hovered ? '800' : '600';
+      pinEl.style.backgroundImage = `url(${hovered ? dotHover.url : dot.url})`;
       labelEl.style.backgroundColor = hovered ? LABEL_BG_HOVER : LABEL_BG;
       labelEl.style.borderColor = hovered ? LABEL_BORDER_HOVER : LABEL_BORDER;
       connectorEl.style.backgroundColor = hovered ? CONNECTOR_COLOR_HOVER : CONNECTOR_COLOR;
