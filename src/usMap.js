@@ -546,10 +546,9 @@ function setGlobeBaseVisible(visible) {
 }
 
 // Mounts the globe into the app's real scene/camera/controls/renderer —
-// `locations`: [{ name, lat, lon, onSelect() }]. `onSkip` fires when the
-// "Enter" button is used instead of picking a marker. Returns `{ dispose }`.
+// `locations`: [{ name, lat, lon, onSelect() }]. Returns `{ dispose }`.
 export function mountUSOverview({
-  scene, camera, controls, renderer, apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY, locations = [], onSkip,
+  scene, camera, controls, renderer, apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY, locations = [],
   onActivity, seed,
 }) {
   if (!apiKey) console.error('US overview: missing VITE_GOOGLE_MAPS_API_KEY');
@@ -639,6 +638,7 @@ export function mountUSOverview({
     camera.updateMatrixWorld(true);
     controls.target.copy(groundP);
     updateMarkers();
+    updateZoomOutButtonVisibility();
   }
 
   // No pan boundary — clamp only latitude (avoiding the pole singularity)
@@ -1426,18 +1426,6 @@ export function mountUSOverview({
   `;
   domParent.appendChild(title);
 
-  const enterBtn = document.createElement('button');
-  enterBtn.textContent = 'Enter →';
-  enterBtn.style.cssText = `
-    position: fixed; bottom: 32px; left: 50%; transform: translateX(-50%);
-    appearance: none; border: 1px solid rgba(255,255,255,0.25);
-    background: rgba(18,20,26,0.75); backdrop-filter: blur(10px);
-    color: #f2f4f8; font: inherit; font-size: 13px; font-weight: 600;
-    padding: 10px 22px; border-radius: 999px; cursor: pointer; z-index: 20;
-  `;
-  enterBtn.addEventListener('click', () => onSkip?.());
-  domParent.appendChild(enterBtn);
-
   const zoomOutBtn = document.createElement('button');
   zoomOutBtn.textContent = '⤢ Zoom Out';
   zoomOutBtn.style.cssText = `
@@ -1457,6 +1445,19 @@ export function mountUSOverview({
     ensureGrid();
   });
   domParent.appendChild(zoomOutBtn);
+
+  // Hidden once the button would have nothing left to do — clicking it
+  // resets to initialUSFitZoom(), so once the camera is already there (or
+  // further out still, e.g. mid flyOut back toward it), showing a button
+  // whose click wouldn't visibly change anything just reads as broken.
+  // Called from applyCamera() itself so it stays in sync with every path
+  // that changes zoom (wheel, drag momentum's own re-clamping, this button,
+  // flyTo/flyOut, resize) rather than needing a matching call at each one.
+  const ZOOM_OUT_VISIBLE_EPSILON = 0.05;
+  function updateZoomOutButtonVisibility() {
+    const restZoom = Math.min(maxZoom, Math.max(minZoom, initialUSFitZoom()));
+    zoomOutBtn.style.display = zoom > restZoom + ZOOM_OUT_VISIBLE_EPSILON ? '' : 'none';
+  }
 
   // Debug reference point: a fixed dot at the exact geometric center of the
   // viewport, independent of any camera/projection math — since applyCamera()
@@ -1588,7 +1589,6 @@ export function mountUSOverview({
     renderer.domElement.style.cursor = prevCursor;
     markerOverlay.dispose();
     title.remove();
-    enterBtn.remove();
     zoomOutBtn.remove();
     centerDot.remove();
     // Hidden, not disposed — see ensureGlobeBase/setGlobeBaseVisible's own
