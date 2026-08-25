@@ -1188,26 +1188,34 @@ export function mountUSOverview({
   // level roughly doubles magnification), so it gets its own, gentler
   // sensitivity — scrolling out stays responsive, scrolling in eases in a
   // bit slower instead of overshooting several levels in one flick.
-  // A single flick's *total* eventual displacement is bounded by
-  // maxSpeed / damping (the velocity's full exponential decay, integrated) —
-  // with maxSpeed 0.22 that ceiling was only ~0.03 zoom levels out of the
-  // ~19-level (minZoom..maxZoom) range, so even a strong flick barely
-  // registered. maxSpeed (below) is what actually needed raising to fix
-  // that; sensitivity here just controls how quickly one flick reaches it.
-  const WHEEL_ZOOM_IN_SENSITIVITY = 0.004;
-  const WHEEL_ZOOM_OUT_SENSITIVITY = 0.008;
+  //
+  // The two previous passes at this both missed the same thing: a single
+  // *physical mouse-wheel notch* (one discrete click, not a trackpad's
+  // stream of small events) sends one wheel event with deltaY around 100.
+  // Sensitivity has to be high enough that deltaY*sensitivity alone reaches
+  // maxSpeed on that one event — otherwise the velocity never saturates and
+  // raising maxSpeed further does nothing for a mouse-wheel user, only for
+  // a trackpad's rapid-fire stream of events (each adding its own impulse
+  // before the last one decays). At the previous 0.004, one 100-deltaY
+  // notch only reached velocity 0.4 out of a maxSpeed of 0.9 — nowhere
+  // near saturated. Both constants below are chosen together so a single
+  // average notch (deltaY ~100) reliably saturates maxSpeed on its own.
+  const WHEEL_ZOOM_IN_SENSITIVITY = 0.03;
+  const WHEEL_ZOOM_OUT_SENSITIVITY = 0.05;
 
   // Same "flick and glide" primitive the local ground view's dolly-zoom
   // uses (see camera/scrollVelocity.ts) — one wheel flick keeps easing for
   // a beat instead of the zoom level snapping exactly to each raw event's
-  // deltaY. The in/out sensitivity asymmetry (see the comment this used to
-  // sit next to) is applied before the impulse goes in, so the shared
-  // primitive itself stays direction-agnostic — sensitivity here is 1, a
-  // pure passthrough. maxSpeed raised from 0.22 to 0.9 (~4x) — that's the
-  // actual ceiling on how far a single flick can move the zoom level (see
-  // the sensitivity comment above); nothing short of this made a strong
-  // flick feel like it was doing much on a 19-level range.
-  const zoomVelocity = createScrollVelocity({ sensitivity: 1, damping: 7, maxSpeed: 0.9 });
+  // deltaY. The in/out sensitivity asymmetry (see the comment above) is
+  // applied before the impulse goes in, so the shared primitive itself
+  // stays direction-agnostic — sensitivity here is 1, a pure passthrough.
+  // A single saturated impulse's *total* eventual displacement is
+  // maxSpeed / damping (the velocity's full exponential decay, integrated)
+  // — 2.5 / 5 = 0.5 zoom levels per notch, out of the ~19-level
+  // (minZoom..maxZoom) range: enough that a handful of notches covers a
+  // meaningful chunk of the range, without one notch overshooting several
+  // levels outright.
+  const zoomVelocity = createScrollVelocity({ sensitivity: 1, damping: 5, maxSpeed: 2.5 });
   let zoomRaf = null;
   // The cursor position onWheel last fired at — stepZoomVelocity below
   // keeps re-centering on this every eased frame of the glide, not just

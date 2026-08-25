@@ -7,31 +7,50 @@
 // targeting a CSS background-image instead of a THREE.Texture) makes them
 // visually belong with the chunky retro look everything behind them has.
 //
-// Authored as a coordinate list, not nested loops shaping a circle — the
-// classic pin silhouette (round head with a punched-out hole, tapering to
-// a point) needs asymmetric, hand-placed pixels a formula won't produce
-// cleanly at this size.
-const PIN_WIDTH = 11;
-const PIN_HEIGHT = 10;
-// Row-by-row fill mask, top to bottom — one string per row, one character
-// per pixel column. '.' = transparent, 'o' = outline/hole (same color —
-// the hole reads as a clean punch-through, not a softer inner shadow),
-// 'f' = fill. The head is wide enough (11px) to fit a hole that's the
-// same number of rows tall as it is columns wide — narrower masks read as
-// an oval, since a hole only 3 rows tall can't look round at 5 columns
-// wide.
-const PIN_MASK = [
-  '..offfffo..',
-  '.offfffffo.',
-  '.offfofffo.',
-  'offfooofffo',
-  'offoooooffo',
-  'offfooofffo',
-  '.offfofffo.',
-  '...offfo...',
-  '....ofo....',
-  '.....o.....',
-];
+// The silhouette is computed from actual circle math (a hand-drawn ASCII
+// mask was tried first and, despite looking reasonable row-by-row, came out
+// as a jagged diamond once rendered — eyeballing per-row pixel widths isn't
+// a reliable way to author something that's supposed to read as round).
+// Per row y, half-width(y) is the true distance-formula half-width of a
+// circle of radius PIN_RADIUS for the head, smoothly continued into a
+// short linear taper to a single point for the tail — see buildRowHalfWidths.
+const PIN_RADIUS = 8;
+const HOLE_RADIUS = 4;
+const TAIL_LENGTH = 6;
+// Circle rows this coarse close to a point at the very top anyway (their
+// natural half-width is under a pixel) — flattening them to a flat cap
+// avoids a single stray spike pixel poking out above the dome.
+const MIN_CAP_WIDTH = 3;
+const OUTLINE_THICKNESS = 1;
+
+const PIN_WIDTH = PIN_RADIUS * 2 + 1;
+const PIN_HEIGHT = PIN_RADIUS * 2 + 1 + TAIL_LENGTH;
+
+function buildRowHalfWidths(): number[] {
+  const cy = PIN_RADIUS;
+  // The taper starts a couple of rows before the circle would fully close
+  // on its own and picks up from whatever half-width the circle had there
+  // — matching that starting width, rather than resetting to some fixed
+  // value, is what keeps the head and tail reading as one continuous
+  // silhouette instead of a circle with a disconnected stick glued below it.
+  const taperStartRow = PIN_RADIUS * 2 - 2;
+  const taperStartDy = taperStartRow - cy;
+  const taperStartWidth = Math.sqrt(Math.max(0, PIN_RADIUS * PIN_RADIUS - taperStartDy * taperStartDy));
+
+  const widths: number[] = [];
+  for (let y = 0; y < PIN_HEIGHT; y++) {
+    const dy = y - cy;
+    if (y <= taperStartRow) {
+      let halfWidth = Math.sqrt(Math.max(0, PIN_RADIUS * PIN_RADIUS - dy * dy));
+      if (y <= cy) halfWidth = Math.max(halfWidth, MIN_CAP_WIDTH);
+      widths.push(halfWidth);
+    } else {
+      const t = (y - taperStartRow) / (TAIL_LENGTH + 2);
+      widths.push(taperStartWidth * (1 - t));
+    }
+  }
+  return widths;
+}
 
 export interface PinIconOptions {
   fill?: string;
@@ -45,7 +64,7 @@ export interface PinIconOptions {
 export function createPixelPinIconUrl({
   fill = '#ff5a3c',
   outline = '#ffffff',
-  scale = 2,
+  scale = 1,
 }: PinIconOptions = {}): { url: string; width: number; height: number } {
   const canvas = document.createElement('canvas');
   canvas.width = PIN_WIDTH;
@@ -54,13 +73,23 @@ export function createPixelPinIconUrl({
   if (!ctx) return { url: '', width: PIN_WIDTH * scale, height: PIN_HEIGHT * scale };
 
   ctx.imageSmoothingEnabled = false;
-  for (let y = 0; y < PIN_MASK.length; y++) {
-    const row = PIN_MASK[y];
-    if (!row) continue;
-    for (let x = 0; x < row.length; x++) {
-      const cell = row[x];
-      if (cell === '.') continue;
-      ctx.fillStyle = cell === 'o' ? outline : fill;
+  const cx = PIN_RADIUS;
+  const cy = PIN_RADIUS;
+  const rowHalfWidths = buildRowHalfWidths();
+
+  for (let y = 0; y < PIN_HEIGHT; y++) {
+    const halfWidth = rowHalfWidths[y]!;
+    const dy = y - cy;
+    for (let x = 0; x < PIN_WIDTH; x++) {
+      const dx = x - cx;
+      if (Math.abs(dx) > halfWidth) continue;
+      // The hole is squashed slightly on its vertical axis below center —
+      // a true circle there reads as sitting too high once the tail pulls
+      // the eye down, since the tail has no matching width above it.
+      const holeDy = dy > 0 ? dy * 0.9 : dy;
+      const inHole = dx * dx + holeDy * holeDy <= HOLE_RADIUS * HOLE_RADIUS;
+      const inOutline = !inHole && Math.abs(dx) > halfWidth - OUTLINE_THICKNESS;
+      ctx.fillStyle = inHole || inOutline ? outline : fill;
       ctx.fillRect(x, y, 1, 1);
     }
   }
