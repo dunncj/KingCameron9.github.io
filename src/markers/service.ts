@@ -37,6 +37,14 @@ export interface MarkerOverlay {
 // bitmap (see dotIcon.ts), not a CSS border-radius circle — a CSS circle
 // renders smooth/anti-aliased, which reads as a modern dot dropped onto
 // the site's otherwise chunky pixel-art look instead of belonging with it.
+const LABEL_BG = 'rgba(10,10,14,0.82)';
+const LABEL_BG_HOVER = 'rgba(24,24,30,0.95)';
+const LABEL_BORDER = 'rgba(255,255,255,0.25)';
+const LABEL_BORDER_HOVER = 'rgba(255,255,255,0.7)';
+const CONNECTOR_COLOR = 'rgba(255,255,255,0.5)';
+const CONNECTOR_COLOR_HOVER = 'rgba(255,255,255,0.95)';
+const DOT_HOVER_SCALE = 1.8;
+
 export function createMarkerOverlay(
   container: HTMLElement,
   markers: MarkerDescriptor[],
@@ -74,6 +82,7 @@ export function createMarkerOverlay(
       background-size: 100% 100%;
       image-rendering: pixelated;
       cursor: pointer; user-select: none;
+      transition: transform 0.12s ease;
     `;
 
     // Positioning anchor for this marker's label + connector, in the
@@ -93,10 +102,11 @@ export function createMarkerOverlay(
     labelEl.style.cssText = `
       position: absolute; left: 0; top: 0;
       font: 600 12px system-ui, -apple-system, sans-serif;
-      color: #fff; background: rgba(10,10,14,0.82);
-      border: 1px solid rgba(255,255,255,0.25);
+      color: #fff; background: ${LABEL_BG};
+      border: 1px solid ${LABEL_BORDER};
       padding: 3px 8px; border-radius: 2px; white-space: nowrap;
       cursor: pointer; user-select: none;
+      transition: background-color 0.12s ease, border-color 0.12s ease;
     `;
 
     // A thin leader line back to the point — only shown when layoutLabels()
@@ -108,9 +118,10 @@ export function createMarkerOverlay(
     const connectorEl = document.createElement('div');
     connectorEl.style.cssText = `
       position: absolute; left: 0; top: 0;
-      height: 1px; background: rgba(255,255,255,0.5);
+      height: 1px; background: ${CONNECTOR_COLOR};
       transform-origin: 0 0; pointer-events: none;
       display: none;
+      transition: background-color 0.12s ease;
     `;
 
     labelAnchor.appendChild(connectorEl);
@@ -129,6 +140,25 @@ export function createMarkerOverlay(
     pinEl.addEventListener('click', handleClick);
     labelEl.addEventListener('mousedown', stopDrag);
     labelEl.addEventListener('click', handleClick);
+
+    // Hovering either half highlights both — they read as one marker, so
+    // the reaction shouldn't depend on which part the cursor happens to be
+    // over. The dot scales up (its shape is a baked-in bitmap, not
+    // something CSS can restyle directly); the label goes bold with a
+    // brighter border/background, the usual "this is interactive" cues.
+    const setHovered = (hovered: boolean) => {
+      pinEl.style.transform = hovered
+        ? `translate(-50%, -50%) scale(${DOT_HOVER_SCALE})`
+        : 'translate(-50%, -50%)';
+      labelEl.style.fontWeight = hovered ? '800' : '600';
+      labelEl.style.backgroundColor = hovered ? LABEL_BG_HOVER : LABEL_BG;
+      labelEl.style.borderColor = hovered ? LABEL_BORDER_HOVER : LABEL_BORDER;
+      connectorEl.style.backgroundColor = hovered ? CONNECTOR_COLOR_HOVER : CONNECTOR_COLOR;
+    };
+    pinEl.addEventListener('mouseenter', () => setHovered(true));
+    pinEl.addEventListener('mouseleave', () => setHovered(false));
+    labelEl.addEventListener('mouseenter', () => setHovered(true));
+    labelEl.addEventListener('mouseleave', () => setHovered(false));
 
     // Measured once — the label's text never changes after creation, and
     // layoutLabels() needs a real pixel width (marker names vary a lot in
