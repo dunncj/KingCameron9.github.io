@@ -301,6 +301,7 @@ export interface PresetSettings {
 
 export interface TilesSettings {
   lodBias: number;
+  wholeGlobeLodBoost: number;
 }
 
 export interface Settings {

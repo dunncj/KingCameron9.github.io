@@ -541,6 +541,62 @@ function loadWholeGlobeAtEntryDetail(scene, apiKey, z, cache) {
   }
 }
 
+// A second, finer whole-globe-entry layer, US-only — same idea as
+// fetchWholeGlobeCell/loadWholeGlobeAtEntryDetail above, but bounded to
+// US_FRAME_BOUNDS and fetched at tilesParams.wholeGlobeLodBoost sharper
+// (see its own settings.toml comment). Layered on top of the regular
+// whole-globe layer (polygonOffset between it and the live per-frame
+// grid) rather than replacing it there — everywhere outside the US still
+// only needs the coarser layer, so this only pays the sharper layer's
+// real cost (more, smaller tiles) where it's actually visible.
+function fetchUSRegionCell(scene, apiKey, z, ix, iy, cellSize, key, cache) {
+  if (!apiKey) return;
+  cache.set(key, { mesh: null });
+  const lon = xToLng(ix * cellSize);
+  const lat = yToLat(iy * cellSize);
+  const url = `https://maps.googleapis.com/maps/api/staticmap?center=${lat},${lon}&zoom=${z}&size=${REQUEST_SIZE}x${REQUEST_SIZE}&scale=${REQUEST_SCALE}&maptype=satellite&key=${apiKey}`;
+  const img = new Image();
+  img.crossOrigin = 'anonymous';
+  img.onload = () => {
+    if (!cache.has(key)) return;
+    const texture = new Texture(img);
+    texture.colorSpace = SRGBColorSpace;
+    texture.needsUpdate = true;
+    const geometry = buildGroundPatch(lat, lon, z, WHOLE_GLOBE_ENTRY_RADIUS);
+    // Between the regular whole-globe layer (offset 1, loses to this) and
+    // the live per-frame grid (offset 0/none, still wins over this once it
+    // arrives) — see this function's own comment on why this exists as a
+    // separate layer rather than replacing the coarser one everywhere.
+    const material = new MeshBasicMaterial({
+      map: texture, toneMapped: false,
+      polygonOffset: true, polygonOffsetFactor: 0.5, polygonOffsetUnits: 0.5,
+    });
+    applyGlobeShading(material);
+    const mesh = new Mesh(geometry, material);
+    scene.add(mesh);
+    cache.set(key, { mesh });
+  };
+  img.onerror = () => {
+    console.error('US overview: US-region tile failed to load (check API key / Static Maps API enablement)');
+    cache.delete(key);
+  };
+  img.src = url;
+}
+
+function loadUSRegionAtBoostedDetail(scene, apiKey, z, cache) {
+  const cellSize = REQUEST_SIZE / 2 ** z;
+  const ixMin = Math.floor(worldX(US_FRAME_BOUNDS.west) / cellSize);
+  const ixMax = Math.ceil(worldX(US_FRAME_BOUNDS.east) / cellSize);
+  const iyMin = Math.floor(worldY(US_FRAME_BOUNDS.north) / cellSize);
+  const iyMax = Math.ceil(worldY(US_FRAME_BOUNDS.south) / cellSize);
+  for (let iy = iyMin; iy <= iyMax; iy++) {
+    for (let ix = ixMin; ix <= ixMax; ix++) {
+      const key = `${ix}_${iy}`;
+      if (!cache.has(key)) fetchUSRegionCell(scene, apiKey, z, ix, iy, cellSize, key, cache);
+    }
+  }
+}
+
 function fetchBaseGlobe(scene, apiKey, onLoaded) {
   if (!apiKey) return;
   const url = `https://maps.googleapis.com/maps/api/staticmap?center=0,0&zoom=1&size=${REQUEST_SIZE}x${REQUEST_SIZE}&scale=${REQUEST_SCALE}&maptype=satellite&key=${apiKey}`;
@@ -581,13 +637,23 @@ function fetchBaseGlobe(scene, apiKey, onLoaded) {
 // window resize won't refine an already-fetched whole-globe layer, which
 // is an accepted simplification (see this function's own age — it hasn't
 // been worth revisiting).
-function ensureGlobeBase(scene, apiKey, entryZoomFetchZoom) {
+// usRegionZoomFetchZoom sharper than entryZoomFetchZoom (by
+// tilesParams.wholeGlobeLodBoost — see loadUSRegionAtBoostedDetail's own
+// comment) covers just US_FRAME_BOUNDS, layered on top of the coarser
+// whole-globe layer that still covers the entire sphere underneath it.
+function ensureGlobeBase(scene, apiKey, entryZoomFetchZoom, usRegionZoomFetchZoom) {
   if (!globeBase) {
     globeBase = {
-      baseGlobeMesh: null, wholeGlobeCache: new Map(), wholeGlobeZ: entryZoomFetchZoom, polarCapMeshes: [], borderLines: [],
+      baseGlobeMesh: null,
+      wholeGlobeCache: new Map(),
+      usRegionCache: new Map(),
+      wholeGlobeZ: entryZoomFetchZoom,
+      polarCapMeshes: [],
+      borderLines: [],
     };
     fetchBaseGlobe(scene, apiKey, (mesh) => { globeBase.baseGlobeMesh = mesh; });
     loadWholeGlobeAtEntryDetail(scene, apiKey, entryZoomFetchZoom, globeBase.wholeGlobeCache);
+    loadUSRegionAtBoostedDetail(scene, apiKey, usRegionZoomFetchZoom, globeBase.usRegionCache);
     globeBase.polarCapMeshes = buildPolarCaps(scene);
     globeBase.borderLines = buildBorderLines(scene);
   }
@@ -599,6 +665,9 @@ function setGlobeBaseVisible(visible) {
   if (!globeBase) return;
   if (globeBase.baseGlobeMesh) globeBase.baseGlobeMesh.visible = visible;
   for (const entry of globeBase.wholeGlobeCache.values()) {
+    if (entry.mesh) entry.mesh.visible = visible;
+  }
+  for (const entry of globeBase.usRegionCache.values()) {
     if (entry.mesh) entry.mesh.visible = visible;
   }
   for (const mesh of globeBase.polarCapMeshes) mesh.visible = visible;
@@ -951,14 +1020,15 @@ export function mountUSOverview({
   // scaled up, comfortably cover its share of the screen — while still
   // gaining real extra detail every time the user zooms in further, just
   // permanently offset by that constant instead of matching 1:1.
-  // applyBias=false for the one-time whole-globe entry layer (see its own
-  // call site) — that fetch covers the *entire sphere*, not just what's on
-  // screen, so lodBias there multiplies into a genuinely huge jump in tile
-  // count/network/GPU memory for a resolution bump that's only visible
-  // once the camera actually gets close to wherever it's centered. The
-  // live per-frame grid below (which only ever covers the visible area)
-  // is where lodBias actually delivers "sharper" without that cost.
-  function fetchZoomFor(zc, applyBias = true) {
+  // bias defaults to tilesParams.lodBias (the live per-frame grid, which
+  // only ever covers the visible area — sharpening it is cheap). The
+  // one-time whole-globe entry layer (see its own call site) passes
+  // tilesParams.wholeGlobeLodBoost instead, a separate and deliberately
+  // smaller knob: that fetch covers the *entire sphere*, so reusing lodBias
+  // there multiplied a local-grid-sized sharpness bump into a genuinely
+  // huge jump in tile count/network/GPU memory (see settings.toml's own
+  // comment on why these are two different settings, not one).
+  function fetchZoomFor(zc, bias = tilesParams.lodBias) {
     // Never fetches coarser than the entry-level view, however far out the
     // camera itself zooms — past that point the Static Maps math (cell
     // size, UV) stops corresponding to a real request and visibly glitches,
@@ -970,7 +1040,6 @@ export function mountUSOverview({
     // tilesParams.lodBias (see settings.toml) shifts the result up for
     // sharper imagery at the same camera zoom — the -0.6 below is the
     // original fixed margin this used before that became tunable.
-    const bias = applyBias ? tilesParams.lodBias : 0;
     return Math.min(20, Math.max(0, Math.round(clamped - offset - 0.6 + bias)));
   }
 
@@ -1583,7 +1652,12 @@ export function mountUSOverview({
     : Math.min(maxZoom, Math.max(minZoom, initialUSFitZoom() + overviewStartParams.zoomBoost));
   entryZoom = seed ? Math.min(maxZoom, Math.max(minZoom, initialUSFitZoom())) : zoom;
   resize();
-  wholeGlobeZ = ensureGlobeBase(scene, apiKey, fetchZoomFor(entryZoom, false));
+  wholeGlobeZ = ensureGlobeBase(
+    scene,
+    apiKey,
+    fetchZoomFor(entryZoom, 0),
+    fetchZoomFor(entryZoom, tilesParams.wholeGlobeLodBoost),
+  );
   ensureGrid();
   // Even with the globe base always resident (above), a seeded mount opens
   // zoomed in on one specific spot — the location just departed — and

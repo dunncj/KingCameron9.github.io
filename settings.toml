@@ -93,8 +93,8 @@ panMs = 700
 # tiltAzimuthRad for the sign convention. zoomBoost is added on top of the
 # exact whole-US-fit zoom level.
 [transitions.overviewStart]
-tiltDeg = -3.3
-zoomBoost = 1.0
+tiltDeg = 0 
+zoomBoost = 0.65
 
 [transitions.movements.panIn]
 curve = "hyperbolic-out"
@@ -324,17 +324,23 @@ windStreaksDensityScale = 1
 # --- Globe overview tile resolution ---------------------------------------
 # fetchZoomFor (usMap.js) derives the Static Maps API zoom level to request
 # from the camera's own zoom, offset down by how much wider the viewport is
-# than one request's pixel budget — lodBias shifts that result up (sharper,
-# more requests at the same camera zoom) or down (blurrier, fewer/cheaper).
-# Applies to the live per-frame grid (and destination prefetch) only — not
-# the whole-globe entry-detail layer built once at mount, which covers the
-# *entire sphere* and would multiply lodBias into a much bigger jump in
-# tile count than its "sharper near where the camera starts" benefit is
-# worth (see fetchZoomFor's own comment on applyBias). 1.5 previously
-# applied everywhere including that layer and made the whole overview
-# noticeably heavier — 0.7 here is deliberately more conservative.
+# than one request's pixel budget. lodBias shifts that up (sharper, more
+# requests at the same camera zoom) or down, applied to the live per-frame
+# grid (and destination prefetch) only.
+#
+# wholeGlobeLodBoost is the same idea for a second, finer whole-globe-entry
+# layer built once at mount, but bounded to US_FRAME_BOUNDS (see
+# loadUSRegionAtBoostedDetail in usMap.js) instead of the entire sphere —
+# the rest of the globe stays at the coarser base resolution, since the
+# camera never actually gets close to it during the US-framed overview.
+# Each whole-globe tile has Google's attribution watermark baked into a
+# fixed pixel spot, and at the base layer's low resolution one tile's huge
+# geographic footprint reads as one huge, dead-center watermark over the
+# US specifically — this splits that same area across more, smaller tiles
+# there, each with its own smaller watermark instead.
 [tiles]
 lodBias = 0.7
+wholeGlobeLodBoost = 1
 
 # --- Locations ---------------------------------------------------------
 # position/target are local coordinates only meaningful once the 3D tiles

@@ -842,6 +842,13 @@ async function buildDevGui() {
   // Static Maps requests — see fetchZoomFor in usMap.js and settings.toml's
   // own comment on tiles.lodBias.
   transitionFolder.add(tilesParams, 'lodBias', -3, 3, 0.1).name('globe tile sharpness');
+  // Only affects the *next* fresh mount — see fetchZoomFor's own comment on
+  // why this is separate from lodBias above (that layer covers the whole
+  // sphere, so a shared bias would multiply into a much bigger jump in
+  // tile count). Also shrinks how much of the frame the whole-globe
+  // layer's baked-in Google attribution watermark visibly covers, by
+  // splitting the same area across more, smaller tiles.
+  transitionFolder.add(tilesParams, 'wholeGlobeLodBoost', 0, 3, 0.5).name('whole-globe sharpness (mount)');
   // Each movement (pan/zoom, entering/leaving) picks its own curve shape
   // and its own speed through that curve independently — see
   // flightCurves.ts's movementParams and getMovementCurve.
