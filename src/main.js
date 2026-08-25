@@ -342,6 +342,15 @@ function travelTo(lat, lon, position, target, opts = {}) {
       destSkyTarget: lookDownTarget,
       destPos: position.clone(),
       destTarget: target.clone(),
+      // This descend only ever follows the overview's own dive (see
+      // travelToLocation's onSelect wiring) — there's no ground location to
+      // have been "at" a moment ago, so the reported temp lerps up from
+      // space's own reading instead of snapping straight to the
+      // destination's the instant onArriveAt applies its weather (see
+      // updateTravelTempDisplay). destTempF gets filled in by
+      // travelToLocation once that real value is known.
+      lerpTempFromSpace: true,
+      destTempF: null,
     };
     camera.position.copy(destHighPos);
     controls.target.copy(lookDownTarget);
@@ -427,6 +436,22 @@ function updateFlight(dt) {
   controls.target.lerpVectors(flight.destSkyTarget, flight.destTarget, e);
   if (flight.t >= flight.descendDuration) flight = null;
   return true;
+}
+
+// Overrides the panel's displayed temp with an in-progress reading between
+// space and the destination while a flight.lerpTempFromSpace descend plays
+// out — takes the flight object as it stood *before* this frame's
+// updateFlight(dt) call, since that call can null out the module-level
+// `flight` the instant the descend crosses its duration; the object itself
+// (still held here) keeps its final t and destTempF either way, so this
+// naturally lands on exactly destTempF once e reaches 1 instead of missing
+// the last frame's update. Purely a display effect — reads flight.t, never
+// writes to it or anything camera-related.
+function updateTravelTempLerp(flightBeforeUpdate) {
+  if (!flightBeforeUpdate?.lerpTempFromSpace || flightBeforeUpdate.destTempF == null) return;
+  if (!playerPanel) return;
+  const e = easeOutCubic(Math.min(flightBeforeUpdate.t / flightBeforeUpdate.descendDuration, 1));
+  playerPanel.setTemp(SPACE_TEMP_F + (flightBeforeUpdate.destTempF - SPACE_TEMP_F) * e);
 }
 
 // --- Camera bob (only while moving; applied to render pose only, never to
@@ -1082,6 +1107,10 @@ function travelToLocation(name, opts) {
   camera.updateProjectionMatrix();
   travelTo(cfg.lat, cfg.lon, cfg.position, cfg.target, opts);
   onArriveAt(name, { push: opts?.push ?? true });
+  // onArriveAt's own weather.applyPreset already set the panel to the real
+  // destination temp immediately — this is the value updateTravelTempDisplay
+  // lerps toward instead, now that it's known, once per descend frame.
+  if (flight?.lerpTempFromSpace) flight.destTempF = estimatedTempF();
 }
 
 // Instant cut, no flight animation — cancels any flight already in
@@ -1351,10 +1380,6 @@ function enterOverview(seed, { push = true } = {}) {
         },
       };
     }),
-    onSkip: () => {
-      leaveOverview();
-      travelToLocation(LOCATIONS[Math.floor(Math.random() * LOCATIONS.length)].name);
-    },
   });
 }
 // GitHub Pages' 404.html (see public/404.html) redirects a deep link it
@@ -1878,7 +1903,9 @@ function tick() {
   // anything zoom-related. (Wheel input is separately guarded inside
   // localCameraControl itself via isLocalViewActive, since its listener
   // stays attached the whole time rather than only being called from here.)
+  const flightBeforeUpdate = flight;
   if (!updateFlight(dt) && !overviewActive) localCameraControl.update(dt);
+  updateTravelTempLerp(flightBeforeUpdate);
   weather.updateGust(dt);
 
   if (timeMode === 'live') {
