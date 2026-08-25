@@ -691,35 +691,30 @@ tempDeltaF = -5
 # Per-location weighted graph: each node's edges are [presetKey, weight]
 # pairs — where the sky can plausibly go next from here, and how likely
 # each option is relative to the others (see pickWeatherFor in main.js).
-# Palo Alto skews sunny and never sees snow; Urbana leans colder/windier and
-# routes through snow/heavySnow/blizzard instead of rain. Falls Church and
-# Chantilly don't have their own graph — pickWeatherFor falls back to
+# Deliberately restricted to the no-precipitation, low-wind presets only
+# (clear/partlyCloudy/cloudy/overcast/hazy/clearing/breezy) — every
+# precipitation preset (showers/rain/storm/snow/heavySnow/blizzard) and both
+# high-wind presets (windy/heavyWind) are still defined above for manual
+# `:weather` testing, but are never auto-selected: rain/snow spawn real
+# particle systems (see particles/rain.ts, particles/snow.ts) and wind-streak
+# density also scales with wind speed (particles/windStreaks.ts), so keeping
+# auto-rolled weather to this subset keeps particle counts low. Falls Church
+# and Chantilly don't have their own graph — pickWeatherFor falls back to
 # paloAlto's for any location without one.
 
 [weatherGraphs.paloAlto]
-clear = [["partlyCloudy", 5], ["hazy", 3], ["breezy", 2], ["windy", 1]]
-partlyCloudy = [["clear", 4], ["cloudy", 4], ["breezy", 2], ["windy", 1]]
-cloudy = [["partlyCloudy", 3], ["overcast", 3], ["showers", 3], ["windy", 2]]
-overcast = [["cloudy", 3], ["showers", 3], ["rain", 2], ["storm", 1], ["heavyWind", 1]]
-showers = [["rain", 4], ["cloudy", 3], ["clearing", 2], ["partlyCloudy", 1]]
-rain = [["storm", 3], ["clearing", 3], ["showers", 2], ["cloudy", 2]]
-storm = [["rain", 4], ["clearing", 3], ["overcast", 2], ["heavyWind", 1]]
+clear = [["partlyCloudy", 5], ["hazy", 3], ["breezy", 2]]
+partlyCloudy = [["clear", 4], ["cloudy", 4], ["breezy", 2]]
+cloudy = [["partlyCloudy", 3], ["overcast", 3], ["clearing", 2], ["breezy", 2]]
+overcast = [["cloudy", 4], ["clearing", 3], ["partlyCloudy", 2]]
 clearing = [["partlyCloudy", 5], ["clear", 4], ["hazy", 1]]
 hazy = [["clear", 5], ["partlyCloudy", 3], ["breezy", 2]]
-breezy = [["clear", 4], ["windy", 3], ["partlyCloudy", 2], ["heavyWind", 1]]
-windy = [["breezy", 4], ["cloudy", 3], ["heavyWind", 2], ["clear", 1]]
-heavyWind = [["windy", 5], ["storm", 2], ["breezy", 2], ["cloudy", 1]]
+breezy = [["clear", 4], ["partlyCloudy", 3], ["cloudy", 2]]
 
 [weatherGraphs.urbana]
-clear = [["partlyCloudy", 5], ["windy", 3], ["breezy", 2]]
-partlyCloudy = [["cloudy", 4], ["clear", 4], ["windy", 2]]
-cloudy = [["overcast", 4], ["partlyCloudy", 3], ["snow", 2], ["windy", 1]]
-overcast = [["snow", 4], ["cloudy", 3], ["storm", 2], ["heavySnow", 1]]
-snow = [["heavySnow", 4], ["overcast", 3], ["clearing", 2], ["cloudy", 1]]
-heavySnow = [["snow", 4], ["blizzard", 3], ["overcast", 2], ["clearing", 1]]
-blizzard = [["heavySnow", 6], ["windy", 2], ["overcast", 2]]
-storm = [["overcast", 5], ["heavyWind", 3], ["snow", 2]]
+clear = [["partlyCloudy", 5], ["breezy", 3]]
+partlyCloudy = [["cloudy", 4], ["clear", 4], ["breezy", 2]]
+cloudy = [["overcast", 4], ["partlyCloudy", 3], ["breezy", 2]]
+overcast = [["cloudy", 4], ["clearing", 3], ["breezy", 2]]
 clearing = [["partlyCloudy", 5], ["clear", 4], ["cloudy", 1]]
-windy = [["breezy", 4], ["heavyWind", 3], ["cloudy", 2], ["blizzard", 1]]
-heavyWind = [["windy", 5], ["blizzard", 3], ["storm", 2]]
-breezy = [["clear", 4], ["windy", 4], ["partlyCloudy", 2]]
+breezy = [["clear", 4], ["partlyCloudy", 4], ["cloudy", 2]]
