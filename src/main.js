@@ -11,7 +11,7 @@ import { buildDevConsole } from './devconsole';
 import { createLocalCameraControl } from './camera/localCameraControl';
 import {
   mountUSOverview, TILT_RAD, flyInParams, overviewStartParams, overviewFlightState,
-  destPrefetchParams, hoverParams,
+  destPrefetchParams, hoverParams, tilesParams,
 } from './usMap.js';
 import { createCacheSystem } from './cache';
 import { createRenderQualitySystem } from './quality';
@@ -838,6 +838,10 @@ async function buildDevGui() {
   // visibly move anything until you leave and come back.
   transitionFolder.add(overviewStartParams, 'tiltDeg', -30, 30, 1).name('overview start tilt (deg)');
   transitionFolder.add(overviewStartParams, 'zoomBoost', -2, 4, 0.1).name('overview start zoom boost');
+  // Higher = sharper globe imagery at the same camera zoom, more/heavier
+  // Static Maps requests — see fetchZoomFor in usMap.js and settings.toml's
+  // own comment on tiles.lodBias.
+  transitionFolder.add(tilesParams, 'lodBias', -3, 3, 0.1).name('globe tile sharpness');
   // Each movement (pan/zoom, entering/leaving) picks its own curve shape
   // and its own speed through that curve independently — see
   // flightCurves.ts's movementParams and getMovementCurve.

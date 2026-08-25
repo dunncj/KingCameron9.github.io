@@ -93,7 +93,7 @@ panMs = 700
 # tiltAzimuthRad for the sign convention. zoomBoost is added on top of the
 # exact whole-US-fit zoom level.
 [transitions.overviewStart]
-tiltDeg = 8
+tiltDeg = -3.3
 zoomBoost = 1.0
 
 [transitions.movements.panIn]
@@ -320,6 +320,17 @@ starBrightness = 4
 cloudActiveFraction = 1
 precipitationDensityScale = 1
 windStreaksDensityScale = 1
+
+# --- Globe overview tile resolution ---------------------------------------
+# fetchZoomFor (usMap.js) derives the Static Maps API zoom level to request
+# from the camera's own zoom, offset down by how much wider the viewport is
+# than one request's pixel budget — lodBias shifts that result up (sharper,
+# more requests at the same camera zoom) or down (blurrier, fewer/cheaper).
+# Applies everywhere fetchZoomFor is used: the whole-globe entry-detail
+# layer built at mount (so the initial US-framed view starts sharp, not
+# just wherever the camera later zooms to) and the live per-frame grid.
+[tiles]
+lodBias = 1.5
 
 # --- Locations ---------------------------------------------------------
 # position/target are local coordinates only meaningful once the 3D tiles

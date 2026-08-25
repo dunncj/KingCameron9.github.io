@@ -1,8 +1,9 @@
 import {
   MeshBasicMaterial, Mesh, Texture, Vector3, Raycaster, Vector2, Sphere,
-  BufferGeometry, BufferAttribute, SRGBColorSpace,
+  BufferGeometry, BufferAttribute, SRGBColorSpace, Line, LineBasicMaterial,
 } from 'three';
 import { getMovementCurve } from './flightCurves';
+import { US_CANADA_BORDER_SEGMENTS } from './usCanadaBorder';
 import { settings } from './settings/store';
 import { patchShaderSource } from './shaders';
 import { createScrollVelocity } from './camera/scrollVelocity';
@@ -70,6 +71,11 @@ export const flyInParams = settings.transitions.flyIn;
 // via the dev GUI or ":settings set transitions.overviewStart.<key> <value>"
 // takes effect on the next mount without a source edit.
 export const overviewStartParams = settings.transitions.overviewStart;
+// See fetchZoomFor below and settings.toml's own comment — shifts the
+// fetched Static Maps zoom level up or down at every camera zoom, not
+// copied so a live tweak takes effect on the next tile fetch, not just
+// the next mount.
+export const tilesParams = settings.tiles;
 
 // Read every frame by main.js's tick() to drive the zoom-blur post pass
 // (see updateZoomBlur) — this module owns the overview's own rAF loop, so
@@ -405,6 +411,51 @@ function buildPolarCaps(scene) {
   return meshes;
 }
 
+// The US/Canada border, draped directly onto the globe as real geometry —
+// each point is a genuine (lat, lon) from Natural Earth's public-domain
+// admin-0 boundary-lines dataset (see usCanadaBorder.js), not a screen-space
+// post-processing effect. A post-process edge-detection pass would need to
+// find the border in the *imagery* itself (which doesn't actually draw a
+// political line) or maintain its own separate mask texture kept in sync
+// with the imagery's own projection/zoom — genuine surface geometry avoids
+// both problems for free, and reuses sphereXYZ, the same projection every
+// other globe layer already trusts. One `Line` per disconnected coordinate
+// strip (the dataset itself has a real gap where the border runs through
+// open water, not land — see usCanadaBorder.js's own comment) — joining
+// them would draw a spurious straight line across that gap.
+const BORDER_COLOR = 0xffe066;
+function buildBorderLines(scene) {
+  const lines = [];
+  for (const segment of US_CANADA_BORDER_SEGMENTS) {
+    const positions = new Float32Array(segment.length * 3);
+    let p = 0;
+    for (const [lat, lon] of segment) {
+      const pos = sphereXYZ(lat, lon, EARTH_RADIUS_SCENE);
+      positions[p++] = pos.x;
+      positions[p++] = pos.y;
+      positions[p++] = pos.z;
+    }
+    const geometry = new BufferGeometry();
+    geometry.setAttribute('position', new BufferAttribute(positions, 3));
+    // Negative polygonOffset pulls this toward the camera in the depth
+    // test — the same trick the ground layers below use in the opposite
+    // (positive) direction to make coarser layers lose to finer ones (see
+    // fetchWholeGlobeCell's and fetchBaseGlobe's own comments) — so the
+    // border reliably wins against all of them at the same real radius,
+    // without needing its own separate radius gap to stay stable at the
+    // extreme near-plane precision deep zoom already pushes to its limit
+    // (see applyCamera's own comment on that).
+    const material = new LineBasicMaterial({
+      color: BORDER_COLOR, transparent: true, opacity: 0.85, toneMapped: false,
+      polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2,
+    });
+    const line = new Line(geometry, material);
+    scene.add(line);
+    lines.push(line);
+  }
+  return lines;
+}
+
 // --- Persistent globe base (base globe + whole-globe-entry imagery) ------
 // This content is identical every time regardless of which location the
 // overview is centered on, so it's module-level state — fetched once for
@@ -531,11 +582,12 @@ function fetchBaseGlobe(scene, apiKey, onLoaded) {
 function ensureGlobeBase(scene, apiKey, entryZoomFetchZoom) {
   if (!globeBase) {
     globeBase = {
-      baseGlobeMesh: null, wholeGlobeCache: new Map(), wholeGlobeZ: entryZoomFetchZoom, polarCapMeshes: [],
+      baseGlobeMesh: null, wholeGlobeCache: new Map(), wholeGlobeZ: entryZoomFetchZoom, polarCapMeshes: [], borderLines: [],
     };
     fetchBaseGlobe(scene, apiKey, (mesh) => { globeBase.baseGlobeMesh = mesh; });
     loadWholeGlobeAtEntryDetail(scene, apiKey, entryZoomFetchZoom, globeBase.wholeGlobeCache);
     globeBase.polarCapMeshes = buildPolarCaps(scene);
+    globeBase.borderLines = buildBorderLines(scene);
   }
   setGlobeBaseVisible(true);
   return globeBase.wholeGlobeZ;
@@ -548,6 +600,7 @@ function setGlobeBaseVisible(visible) {
     if (entry.mesh) entry.mesh.visible = visible;
   }
   for (const mesh of globeBase.polarCapMeshes) mesh.visible = visible;
+  for (const line of globeBase.borderLines) line.visible = visible;
 }
 
 // Mounts the globe into the app's real scene/camera/controls/renderer —
@@ -905,7 +958,10 @@ export function mountUSOverview({
     const clamped = Math.max(zc, entryZoom);
     const coverDim = Math.max(viewportW, viewportH);
     const offset = Math.log2(coverDim / REQUEST_SIZE);
-    return Math.min(20, Math.max(0, Math.round(clamped - offset - 0.6)));
+    // tilesParams.lodBias (see settings.toml) shifts the result up for
+    // sharper imagery at the same camera zoom — the -0.6 below is the
+    // original fixed margin this used before that became tunable.
+    return Math.min(20, Math.max(0, Math.round(clamped - offset - 0.6 + tilesParams.lodBias)));
   }
 
   function fetchGridCell(z, ix, iy, cellSize, generation) {

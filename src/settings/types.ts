@@ -299,6 +299,10 @@ export interface PresetSettings {
   tempDeltaF: number;
 }
 
+export interface TilesSettings {
+  lodBias: number;
+}
+
 export interface Settings {
   sky: SkySettings;
   stars: StarSettings;
@@ -315,6 +319,7 @@ export interface Settings {
   preload: PreloadSettings;
   cache: CacheSettings;
   render: RenderSettings;
+  tiles: TilesSettings;
   locations: Record<string, LocationSettings>;
   presets: Record<string, PresetSettings>;
   weatherGraphs: Record<string, WeatherGraph>;
