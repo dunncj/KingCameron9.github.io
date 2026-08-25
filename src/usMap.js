@@ -735,8 +735,8 @@ export function mountUSOverview({
 
   // --- Location markers ----------------------------------------------------
   // Projected into screen space every time the camera changes; the actual
-  // pixel-art pin/tag styling and label decluttering (see the Chantilly/
-  // Falls Church problem this replaced) live in src/markers/ now — this
+  // dot/tag styling and label decluttering (see the Chantilly/Falls Church
+  // problem this replaced) live in src/markers/ now — this
   // keeps only the globe-specific part here: real position, and the
   // horizon/frustum visibility test below.
   const markerVec = new Vector3();

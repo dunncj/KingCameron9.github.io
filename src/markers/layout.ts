@@ -2,11 +2,18 @@
 // would misrepresent where a place actually is. What actually needs fixing
 // when two pins land close together on screen (Chantilly and Falls Church,
 // both in the DC suburbs, are the reliable example) is their *labels*:
-// try a handful of positions around the pin — below, above, right, left,
-// in that order of preference — and use the first one that doesn't
-// overlap an already-placed label, falling back to stacking further below
-// only if all four are somehow taken. Leader lines only appear once a
-// label actually had to leave its default (below) spot.
+// try a handful of positions around the pin and use the first one that
+// doesn't overlap an already-placed label, falling back to stacking
+// further out only if all of them are somehow taken.
+//
+// The candidates are diagonal (up-right, up-left, down-right, down-left),
+// not cardinal (straight up/down/left/right) — real map labels extend up
+// and out to a side of their point, connected by a short diagonal leader
+// line, rather than sitting directly on one axis from it. That diagonal is
+// also what makes the leader line always land on the label's actual
+// nearest *corner* (see nearestPointOnBox) instead of the middle of an
+// edge, which is what makes it read as pointing at a specific spot on the
+// map rather than a generic tag with a line under it.
 export interface LabelCandidate {
   id: string;
   px: number;
@@ -35,8 +42,8 @@ export interface LabelPlacement {
   connectorTo: Point;
 }
 
-const GAP = 6;
-const SIDE_GAP = 8;
+const DIAG_GAP_X = 10;
+const DIAG_GAP_Y = 10;
 const COLLISION_MARGIN = 4;
 const STACK_STEP = 4;
 const MAX_STACK_ATTEMPTS = 4;
@@ -52,15 +59,17 @@ function overlaps(a: Box, b: Box): boolean {
   );
 }
 
-// Four candidate offsets, preference order: below (the original default),
-// above, right, left. Each already accounts for the label's own width/
-// height so the *box*, not just an anchor point, clears the pin.
+// Four diagonal candidate offsets, preference order: up-right (the classic
+// default for a map label), up-left, down-right, down-left. Each is the
+// label's top-left corner, chosen so the label's *near* corner — not an
+// edge midpoint — sits DIAG_GAP away from the point in both axes at once,
+// extending the label up/down AND out to a side simultaneously.
 function candidateOffsets(width: number, height: number): Point[] {
   return [
-    { x: -width / 2, y: GAP },
-    { x: -width / 2, y: -(GAP + height) },
-    { x: SIDE_GAP, y: -height / 2 },
-    { x: -(SIDE_GAP + width), y: -height / 2 },
+    { x: DIAG_GAP_X, y: -(DIAG_GAP_Y + height) },
+    { x: -(DIAG_GAP_X + width), y: -(DIAG_GAP_Y + height) },
+    { x: DIAG_GAP_X, y: DIAG_GAP_Y },
+    { x: -(DIAG_GAP_X + width), y: DIAG_GAP_Y },
   ];
 }
 
@@ -96,16 +105,16 @@ export function layoutLabels(candidates: LabelCandidate[]): LabelPlacement[] {
     }
 
     if (!resolved) {
-      // All four directions are already taken (rare — needs three or more
+      // All four diagonals are already taken (rare — needs three or more
       // pins clustered within a couple dozen pixels of each other) — keep
-      // stacking further below the default spot until one's clear.
-      let dy = options[0]!.y;
+      // stacking further down-right until one's clear.
+      let dy = DIAG_GAP_Y;
       for (let attempt = 0; attempt < MAX_STACK_ATTEMPTS; attempt++) {
         dy += c.height + STACK_STEP;
         const box: Box = {
-          x: c.px - c.width / 2, y: c.py + dy, w: c.width, h: c.height,
+          x: c.px + DIAG_GAP_X, y: c.py + dy, w: c.width, h: c.height,
         };
-        chosen = { x: -c.width / 2, y: dy };
+        chosen = { x: DIAG_GAP_X, y: dy };
         if (!placedBoxes.some((b) => overlaps(box, b))) break;
       }
     }

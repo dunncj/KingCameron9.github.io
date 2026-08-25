@@ -1,4 +1,3 @@
-import { createPixelPinIconUrl } from './pinIcon';
 import { layoutLabels, type LabelCandidate } from './layout';
 
 export interface MarkerDescriptor {
@@ -28,21 +27,21 @@ export interface MarkerOverlay {
 }
 
 const PIN_ACCENT = '#ff5a3c';
+const PIN_DIAMETER = 12;
+const PIN_BORDER = 2;
 
-// Plain HTML pins + tags layered over the canvas, not WebGL geometry —
+// Plain HTML dots + tags layered over the canvas, not WebGL geometry —
 // stay crisp regardless of the pixelation shader and get click handling
 // for free (see usMap.js's own original comment, preserved here since it's
-// still exactly why this overlay exists). The pin icon itself is a tiny
-// rasterized bitmap (see pinIcon.ts) so it visually belongs with the
-// chunky retro look of the 3D scene sitting behind it instead of reading
-// as a smooth, modern UI dot dropped on top of it.
+// still exactly why this overlay exists). A pixel-art pin icon (rounded
+// head, punched-out hole, tapered tail) was tried here and repeatedly
+// rendered wrong at this size — a plain white-fill/accent-outline circle
+// is simple enough that there's no shape left to get wrong.
 export function createMarkerOverlay(
   container: HTMLElement,
   markers: MarkerDescriptor[],
   onSelect: (id: string) => void,
 ): MarkerOverlay {
-  const pin = createPixelPinIconUrl({ fill: PIN_ACCENT });
-
   // Two flat layers instead of one wrapper-per-marker: every marker's pin
   // lives in the lower layer, every marker's label+connector in the upper
   // one. A per-marker wrapper with its own z-index only controls paint
@@ -60,19 +59,17 @@ export function createMarkerOverlay(
   container.appendChild(labelsLayer);
 
   const entries = markers.map((marker) => {
-    // Bottom-center anchored — pinIcon.ts's mask tapers to a single-pixel
-    // tip on its last row, centered horizontally, so this is what actually
-    // puts that tip (not the pin's bounding-box center) on the real point,
-    // the standard map-pin convention. left/top are set every frame in
-    // update() to place that origin at the marker's true screen point.
+    // Centered on the point — a circle has no "tip" the way the old
+    // asymmetric pin did, so it just centers its whole box on the true
+    // screen point. left/top are set every frame in update() to place
+    // that origin at the marker's true screen point.
     const pinEl = document.createElement('div');
     pinEl.style.cssText = `
       position: absolute; left: 0; top: 0;
-      transform: translate(-50%, -100%);
-      width: ${pin.width}px; height: ${pin.height}px;
-      background-image: url(${pin.url});
-      background-size: 100% 100%;
-      image-rendering: pixelated;
+      transform: translate(-50%, -50%);
+      width: ${PIN_DIAMETER}px; height: ${PIN_DIAMETER}px;
+      border-radius: 50%; box-sizing: border-box;
+      background: #fff; border: ${PIN_BORDER}px solid ${PIN_ACCENT};
       cursor: pointer; user-select: none;
     `;
 
@@ -190,13 +187,10 @@ export function createMarkerOverlay(
   function getScreenPoint(id: string): { x: number; y: number } | null {
     const entry = byId.get(id);
     if (!entry || entry.pinEl.style.display === 'none') return null;
-    // pinEl's own box is the pin's actual rendered rect (width x height,
-    // bottom-center anchored via its transform) — not a zero-size point
-    // anymore, since it's positioned directly rather than nested inside a
-    // zero-size wrapper. Its horizontal center and bottom edge are exactly
-    // the true anchor point set in update().
+    // pinEl's own box is centered on the true anchor point (translate
+    // -50%,-50%), so the box's own center is exactly that point.
     const rect = entry.pinEl.getBoundingClientRect();
-    return { x: rect.left + rect.width / 2, y: rect.bottom };
+    return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
   }
 
   function dispose() {
