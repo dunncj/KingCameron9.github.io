@@ -326,11 +326,15 @@ windStreaksDensityScale = 1
 # from the camera's own zoom, offset down by how much wider the viewport is
 # than one request's pixel budget — lodBias shifts that result up (sharper,
 # more requests at the same camera zoom) or down (blurrier, fewer/cheaper).
-# Applies everywhere fetchZoomFor is used: the whole-globe entry-detail
-# layer built at mount (so the initial US-framed view starts sharp, not
-# just wherever the camera later zooms to) and the live per-frame grid.
+# Applies to the live per-frame grid (and destination prefetch) only — not
+# the whole-globe entry-detail layer built once at mount, which covers the
+# *entire sphere* and would multiply lodBias into a much bigger jump in
+# tile count than its "sharper near where the camera starts" benefit is
+# worth (see fetchZoomFor's own comment on applyBias). 1.5 previously
+# applied everywhere including that layer and made the whole overview
+# noticeably heavier — 0.7 here is deliberately more conservative.
 [tiles]
-lodBias = 1.5
+lodBias = 0.7
 
 # --- Locations ---------------------------------------------------------
 # position/target are local coordinates only meaningful once the 3D tiles

@@ -3,7 +3,7 @@ import {
   BufferGeometry, BufferAttribute, SRGBColorSpace, Line, LineBasicMaterial,
 } from 'three';
 import { getMovementCurve } from './flightCurves';
-import { US_CANADA_BORDER_SEGMENTS } from './usCanadaBorder';
+import { US_CANADA_BORDER_SEGMENTS, US_MEXICO_BORDER_SEGMENTS } from './usBorders';
 import { settings } from './settings/store';
 import { patchShaderSource } from './shaders';
 import { createScrollVelocity } from './camera/scrollVelocity';
@@ -411,22 +411,24 @@ function buildPolarCaps(scene) {
   return meshes;
 }
 
-// The US/Canada border, draped directly onto the globe as real geometry —
-// each point is a genuine (lat, lon) from Natural Earth's public-domain
-// admin-0 boundary-lines dataset (see usCanadaBorder.js), not a screen-space
-// post-processing effect. A post-process edge-detection pass would need to
-// find the border in the *imagery* itself (which doesn't actually draw a
-// political line) or maintain its own separate mask texture kept in sync
-// with the imagery's own projection/zoom — genuine surface geometry avoids
-// both problems for free, and reuses sphereXYZ, the same projection every
-// other globe layer already trusts. One `Line` per disconnected coordinate
-// strip (the dataset itself has a real gap where the border runs through
-// open water, not land — see usCanadaBorder.js's own comment) — joining
-// them would draw a spurious straight line across that gap.
-const BORDER_COLOR = 0xffe066;
+// The US borders (Canada and Mexico), draped directly onto the globe as
+// real geometry — each point is a genuine (lat, lon) from Natural Earth's
+// public-domain admin-0 boundary-lines dataset (see usBorders.js), not a
+// screen-space post-processing effect. A post-process edge-detection pass
+// would need to find the border in the *imagery* itself (which doesn't
+// actually draw a political line) or maintain its own separate mask
+// texture kept in sync with the imagery's own projection/zoom — genuine
+// surface geometry avoids both problems for free, and reuses sphereXYZ,
+// the same projection every other globe layer already trusts. One `Line`
+// per disconnected coordinate strip (the Canada dataset itself has a real
+// gap where the border runs through open water, not land — see
+// usBorders.js's own comment) — joining them would draw a spurious
+// straight line across that gap.
+const BORDER_COLOR = 0xd8dde3; // pale white/gray — a subtle reference line, not a bold graphic
+const BORDER_OPACITY = 0.35;
 function buildBorderLines(scene) {
   const lines = [];
-  for (const segment of US_CANADA_BORDER_SEGMENTS) {
+  for (const segment of [...US_CANADA_BORDER_SEGMENTS, ...US_MEXICO_BORDER_SEGMENTS]) {
     const positions = new Float32Array(segment.length * 3);
     let p = 0;
     for (const [lat, lon] of segment) {
@@ -446,7 +448,7 @@ function buildBorderLines(scene) {
     // extreme near-plane precision deep zoom already pushes to its limit
     // (see applyCamera's own comment on that).
     const material = new LineBasicMaterial({
-      color: BORDER_COLOR, transparent: true, opacity: 0.85, toneMapped: false,
+      color: BORDER_COLOR, transparent: true, opacity: BORDER_OPACITY, toneMapped: false,
       polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2,
     });
     const line = new Line(geometry, material);
@@ -949,7 +951,14 @@ export function mountUSOverview({
   // scaled up, comfortably cover its share of the screen — while still
   // gaining real extra detail every time the user zooms in further, just
   // permanently offset by that constant instead of matching 1:1.
-  function fetchZoomFor(zc) {
+  // applyBias=false for the one-time whole-globe entry layer (see its own
+  // call site) — that fetch covers the *entire sphere*, not just what's on
+  // screen, so lodBias there multiplies into a genuinely huge jump in tile
+  // count/network/GPU memory for a resolution bump that's only visible
+  // once the camera actually gets close to wherever it's centered. The
+  // live per-frame grid below (which only ever covers the visible area)
+  // is where lodBias actually delivers "sharper" without that cost.
+  function fetchZoomFor(zc, applyBias = true) {
     // Never fetches coarser than the entry-level view, however far out the
     // camera itself zooms — past that point the Static Maps math (cell
     // size, UV) stops corresponding to a real request and visibly glitches,
@@ -961,7 +970,8 @@ export function mountUSOverview({
     // tilesParams.lodBias (see settings.toml) shifts the result up for
     // sharper imagery at the same camera zoom — the -0.6 below is the
     // original fixed margin this used before that became tunable.
-    return Math.min(20, Math.max(0, Math.round(clamped - offset - 0.6 + tilesParams.lodBias)));
+    const bias = applyBias ? tilesParams.lodBias : 0;
+    return Math.min(20, Math.max(0, Math.round(clamped - offset - 0.6 + bias)));
   }
 
   function fetchGridCell(z, ix, iy, cellSize, generation) {
@@ -1573,7 +1583,7 @@ export function mountUSOverview({
     : Math.min(maxZoom, Math.max(minZoom, initialUSFitZoom() + overviewStartParams.zoomBoost));
   entryZoom = seed ? Math.min(maxZoom, Math.max(minZoom, initialUSFitZoom())) : zoom;
   resize();
-  wholeGlobeZ = ensureGlobeBase(scene, apiKey, fetchZoomFor(entryZoom));
+  wholeGlobeZ = ensureGlobeBase(scene, apiKey, fetchZoomFor(entryZoom, false));
   ensureGrid();
   // Even with the globe base always resident (above), a seeded mount opens
   // zoomed in on one specific spot — the location just departed — and
