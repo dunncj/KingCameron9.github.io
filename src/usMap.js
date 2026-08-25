@@ -1492,13 +1492,13 @@ export function mountUSOverview({
   //
   // A dead-on north-facing, exactly-fit shot read as flatter/less centered
   // than a slight turn and a bit more depth — INITIAL_TILT_RAD rotates the
-  // camera's trailing offset a bit clockwise (see applyCamera's own comment
-  // on tiltAzimuthRad — positive turns the look direction from north toward
-  // east, i.e. "right"), and INITIAL_ZOOM_BOOST nudges past the exact
-  // whole-US fit zoom by roughly what a handful of wheel notches would.
-  // Only the fresh-mount framing, not the seed path — that one already
-  // reopens on the local view's own exact saved shot.
-  const INITIAL_TILT_RAD = (15 * Math.PI) / 180;
+  // camera's trailing offset a bit counterclockwise (see applyCamera's own
+  // comment on tiltAzimuthRad — negative turns the look direction from
+  // north toward west, i.e. "left"), and INITIAL_ZOOM_BOOST nudges past the
+  // exact whole-US fit zoom by roughly what a handful of wheel notches
+  // would. Only the fresh-mount framing, not the seed path — that one
+  // already reopens on the local view's own exact saved shot.
+  const INITIAL_TILT_RAD = (-15 * Math.PI) / 180;
   const INITIAL_ZOOM_BOOST = 0.8;
   if (seed) {
     centerLat = seed.lat;
