@@ -83,8 +83,17 @@ function nearestPointOnBox(box: Box): Point {
 // Deterministic and order-stable (sorts by screen x itself) so calling this
 // every frame with the same inputs produces the same layout — no jitter
 // from iteration-order differences between frames.
+//
+// Sorted right-to-left, not left-to-right: the first marker processed in
+// any colliding pair gets the up-right default, and later ones fall back
+// to up-left when that collides — so processing the *rightmost* marker
+// first is what makes it the one that leans right, with its left neighbor
+// falling back to leaning left, away from it. Left-to-right order did the
+// opposite: the leftmost of a pair claimed the default and ended up
+// leaning right, toward its neighbor, while the rightmost got bumped left
+// — both labels pointing inward instead of splaying outward from the pair.
 export function layoutLabels(candidates: LabelCandidate[]): LabelPlacement[] {
-  const ordered = [...candidates].sort((a, b) => a.px - b.px);
+  const ordered = [...candidates].sort((a, b) => b.px - a.px);
   const placedBoxes: Box[] = [];
   const placements: LabelPlacement[] = [];
 

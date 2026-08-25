@@ -1,3 +1,4 @@
+import { createPixelDotIconUrl } from './dotIcon';
 import { layoutLabels, type LabelCandidate } from './layout';
 
 export interface MarkerDescriptor {
@@ -26,22 +27,23 @@ export interface MarkerOverlay {
   dispose(): void;
 }
 
-const PIN_ACCENT = '#ff5a3c';
-const PIN_DIAMETER = 12;
-const PIN_BORDER = 2;
-
 // Plain HTML dots + tags layered over the canvas, not WebGL geometry —
 // stay crisp regardless of the pixelation shader and get click handling
 // for free (see usMap.js's own original comment, preserved here since it's
 // still exactly why this overlay exists). A pixel-art pin icon (rounded
 // head, punched-out hole, tapered tail) was tried here and repeatedly
-// rendered wrong at this size — a plain white-fill/accent-outline circle
-// is simple enough that there's no shape left to get wrong.
+// rendered wrong at this size — a plain white-fill/accent-outline dot is
+// simple enough that there's no shape left to get wrong. It's a rasterized
+// bitmap (see dotIcon.ts), not a CSS border-radius circle — a CSS circle
+// renders smooth/anti-aliased, which reads as a modern dot dropped onto
+// the site's otherwise chunky pixel-art look instead of belonging with it.
 export function createMarkerOverlay(
   container: HTMLElement,
   markers: MarkerDescriptor[],
   onSelect: (id: string) => void,
 ): MarkerOverlay {
+  const dot = createPixelDotIconUrl();
+
   // Two flat layers instead of one wrapper-per-marker: every marker's pin
   // lives in the lower layer, every marker's label+connector in the upper
   // one. A per-marker wrapper with its own z-index only controls paint
@@ -67,9 +69,10 @@ export function createMarkerOverlay(
     pinEl.style.cssText = `
       position: absolute; left: 0; top: 0;
       transform: translate(-50%, -50%);
-      width: ${PIN_DIAMETER}px; height: ${PIN_DIAMETER}px;
-      border-radius: 50%; box-sizing: border-box;
-      background: #fff; border: ${PIN_BORDER}px solid ${PIN_ACCENT};
+      width: ${dot.size}px; height: ${dot.size}px;
+      background-image: url(${dot.url});
+      background-size: 100% 100%;
+      image-rendering: pixelated;
       cursor: pointer; user-select: none;
     `;
 
