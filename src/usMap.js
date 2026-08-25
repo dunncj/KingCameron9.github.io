@@ -8,6 +8,7 @@ import { settings } from './settings/store';
 import { patchShaderSource } from './shaders';
 import { createScrollVelocity } from './camera/scrollVelocity';
 import { createMarkerOverlay } from './markers';
+import { PROVIDERS, DEFAULT_PROVIDER_ID } from './mapProviders';
 
 // The landing experience: one continuous 3D camera, never a hard cut to a
 // separate renderer. Mounts a live, pixelated satellite-imagery patch onto
@@ -31,8 +32,18 @@ import { createMarkerOverlay } from './markers';
 // flat Y height.
 
 const TILE_SIZE = 256;
-const REQUEST_SIZE = 640; // Maps Static API's max free "size" per axis
-const REQUEST_SCALE = 2; // retina pixel density; same geo coverage, sharper texture
+// The active satellite-imagery source — settings.tiles.provider (see
+// settings.toml's own comment) picked once at module load, not
+// live-swappable mid-session. Every fetch function below builds its URL
+// through activeProvider.buildTileUrl instead of a hardcoded Google
+// template — see mapProviders.js for what makes that swap work cleanly:
+// this app's own cell grid is edge-aligned to cellPx/2^z world-units, so a
+// provider whose cellPx matches its native tile size (Esri: 256) gets its
+// own tile x/y for free from this app's own ix/iy, no separate lat/lon
+// conversion or tile-stitching needed.
+const activeProvider = PROVIDERS[settings.tiles.provider] ?? PROVIDERS[DEFAULT_PROVIDER_ID];
+const REQUEST_SIZE = activeProvider.cellPx; // one cell's request size, in pixels per axis — provider-specific (see mapProviders.js)
+const REQUEST_SCALE = activeProvider.scale; // pixel density multiplier — same geo coverage, sharper texture where the provider supports it
 const PATCH_SEGMENTS = 16; // ground patch grid resolution per axis
 // Used only to frame the *initial* view (whole continental US visible) —
 // panning/zooming are no longer clamped to this or any other region; you
@@ -473,11 +484,20 @@ function buildBorderLines(scene) {
 let globeBase = null; // { baseGlobeMesh: Mesh|null, wholeGlobeCache: Map, wholeGlobeZ: number } | null until first mount
 
 function fetchWholeGlobeCell(scene, apiKey, z, ix, iy, cellSize, key, cache) {
-  if (!apiKey) return;
+  if (activeProvider.requiresApiKey && !apiKey) return;
   cache.set(key, { mesh: null });
-  const lon = xToLng(ix * cellSize);
-  const lat = yToLat(iy * cellSize);
-  const url = `https://maps.googleapis.com/maps/api/staticmap?center=${lat},${lon}&zoom=${z}&size=${REQUEST_SIZE}x${REQUEST_SIZE}&scale=${REQUEST_SCALE}&maptype=satellite&key=${apiKey}`;
+  // +0.5: cell (ix, iy) spans [ix, ix+1) * cellSize in zoom-0 world-space,
+  // so this is that cell's true center, not its edge — matters for more
+  // than just correctness of where the fetched image lands: it's what
+  // makes ix/iy line up exactly with a standard XYZ tile provider's own
+  // tile numbering whenever cellSize matches that provider's native tile
+  // size (see mapProviders.js's own top comment). Harmless for Google,
+  // which only wants a center point and doesn't care what grid it's on.
+  const lon = xToLng((ix + 0.5) * cellSize);
+  const lat = yToLat((iy + 0.5) * cellSize);
+  const url = activeProvider.buildTileUrl({
+    lat, lon, z, ix, iy, apiKey,
+  });
   const img = new Image();
   img.crossOrigin = 'anonymous';
   img.onload = () => {
@@ -550,11 +570,13 @@ function loadWholeGlobeAtEntryDetail(scene, apiKey, z, cache) {
 // only needs the coarser layer, so this only pays the sharper layer's
 // real cost (more, smaller tiles) where it's actually visible.
 function fetchUSRegionCell(scene, apiKey, z, ix, iy, cellSize, key, cache) {
-  if (!apiKey) return;
+  if (activeProvider.requiresApiKey && !apiKey) return;
   cache.set(key, { mesh: null });
-  const lon = xToLng(ix * cellSize);
-  const lat = yToLat(iy * cellSize);
-  const url = `https://maps.googleapis.com/maps/api/staticmap?center=${lat},${lon}&zoom=${z}&size=${REQUEST_SIZE}x${REQUEST_SIZE}&scale=${REQUEST_SCALE}&maptype=satellite&key=${apiKey}`;
+  const lon = xToLng((ix + 0.5) * cellSize);
+  const lat = yToLat((iy + 0.5) * cellSize);
+  const url = activeProvider.buildTileUrl({
+    lat, lon, z, ix, iy, apiKey,
+  });
   const img = new Image();
   img.crossOrigin = 'anonymous';
   img.onload = () => {
@@ -598,7 +620,16 @@ function loadUSRegionAtBoostedDetail(scene, apiKey, z, cache) {
 }
 
 function fetchBaseGlobe(scene, apiKey, onLoaded) {
-  if (!apiKey) return;
+  // Google-only: this asks for the *entire* equirectangular world in one
+  // request, a shape only Google's flexible arbitrary-size API supports —
+  // a fixed-tile provider like Esri has no single-request equivalent (its
+  // own zoom-1 tile is one quarter of the world, not the whole thing), and
+  // this is only ever the deepest, briefly-visible fallback underneath the
+  // real per-cell imagery (loadWholeGlobeAtEntryDetail/
+  // loadUSRegionAtBoostedDetail) — losing it for another provider means a
+  // moment of black instead of a coarse placeholder while those load, not
+  // a permanent gap once they have.
+  if (!activeProvider.supportsWholeWorldImage || !apiKey) return;
   const url = `https://maps.googleapis.com/maps/api/staticmap?center=0,0&zoom=1&size=${REQUEST_SIZE}x${REQUEST_SIZE}&scale=${REQUEST_SCALE}&maptype=satellite&key=${apiKey}`;
   const img = new Image();
   img.crossOrigin = 'anonymous';
@@ -680,7 +711,7 @@ export function mountUSOverview({
   scene, camera, controls, renderer, apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY, locations = [],
   onActivity, seed,
 }) {
-  if (!apiKey) console.error('US overview: missing VITE_GOOGLE_MAPS_API_KEY');
+  if (activeProvider.requiresApiKey && !apiKey) console.error(`US overview: missing VITE_GOOGLE_MAPS_API_KEY (required by tiles provider "${activeProvider.id}")`);
 
   const domParent = renderer.domElement.parentElement || document.body;
   const globeSphere = new Sphere(new Vector3(0, 0, 0), EARTH_RADIUS_SCENE);
@@ -1044,12 +1075,14 @@ export function mountUSOverview({
   }
 
   function fetchGridCell(z, ix, iy, cellSize, generation) {
-    if (!apiKey) return;
+    if (activeProvider.requiresApiKey && !apiKey) return;
     const key = `${ix}_${iy}`;
     tileCache.set(key, { mesh: null });
-    const lon = xToLng(ix * cellSize);
-    const lat = yToLat(iy * cellSize);
-    const url = `https://maps.googleapis.com/maps/api/staticmap?center=${lat},${lon}&zoom=${z}&size=${REQUEST_SIZE}x${REQUEST_SIZE}&scale=${REQUEST_SCALE}&maptype=satellite&key=${apiKey}`;
+    const lon = xToLng((ix + 0.5) * cellSize);
+    const lat = yToLat((iy + 0.5) * cellSize);
+    const url = activeProvider.buildTileUrl({
+      lat, lon, z, ix, iy, apiKey,
+    });
     const img = new Image();
     img.crossOrigin = 'anonymous';
     img.onload = () => {
@@ -1128,8 +1161,11 @@ export function mountUSOverview({
     }
     const generation = gridGeneration;
     const cellSize = REQUEST_SIZE / 2 ** z; // full tile width, in zoom-0 Mercator world units
-    const ixCenter = Math.round(worldX(centerLon) / cellSize);
-    const iyCenter = Math.round(worldY(centerLat) / cellSize);
+    // floor, not round: cell ix spans [ix, ix+1) * cellSize (see
+    // fetchWholeGlobeCell's own comment on why), so floor is what finds
+    // "the cell containing this point", not "the nearest cell center".
+    const ixCenter = Math.floor(worldX(centerLon) / cellSize);
+    const iyCenter = Math.floor(worldY(centerLat) / cellSize);
     for (let dy = -GRID_RADIUS; dy <= GRID_RADIUS; dy++) {
       for (let dx = -GRID_RADIUS; dx <= GRID_RADIUS; dx++) {
         const ix = ixCenter + dx;
@@ -1245,7 +1281,7 @@ export function mountUSOverview({
   function fetchDestGridCell({
     z, ix, iy, cellSize, opacity, polyOffset,
   }) {
-    if (!apiKey) return;
+    if (activeProvider.requiresApiKey && !apiKey) return;
     const key = `${z}_${ix}_${iy}`;
     // Two tiers can clamp to the same z (both hitting the wholeGlobeZ+1
     // floor, say) and request the exact same cell twice — tiers are always
@@ -1253,16 +1289,16 @@ export function mountUSOverview({
     // here first owns it.
     if (destTileCache.has(key)) return;
     destTileCache.set(key, { mesh: null });
-    const lon = xToLng(ix * cellSize);
-    const lat = yToLat(iy * cellSize);
-    // scale=1 here, not the primary grid's REQUEST_SCALE (2/retina) — these
-    // tiers are already deliberately coarse/blurry by design (see
-    // destPrefetchParams' own comment), so paying for 4x the pixels
-    // (scale doubles both axes) to render them softened and often partly
-    // occluded by the finer tier on top is pure waste — real bytes over
-    // the network and real decode time for detail that was never going to
-    // read as sharp anyway.
-    const url = `https://maps.googleapis.com/maps/api/staticmap?center=${lat},${lon}&zoom=${z}&size=${REQUEST_SIZE}x${REQUEST_SIZE}&scale=1&maptype=satellite&key=${apiKey}`;
+    const lon = xToLng((ix + 0.5) * cellSize);
+    const lat = yToLat((iy + 0.5) * cellSize);
+    // scale: 1 here (see buildTileUrl's own comment on this override) —
+    // these tiers are already deliberately coarse/blurry by design (see
+    // destPrefetchParams' own comment), so paying for a sharper request to
+    // render it softened and often partly occluded by the finer tier on
+    // top is pure waste.
+    const url = activeProvider.buildTileUrl({
+      lat, lon, z, ix, iy, apiKey, scale: 1,
+    });
     const img = new Image();
     img.crossOrigin = 'anonymous';
     img.onload = () => {
@@ -1284,8 +1320,9 @@ export function mountUSOverview({
   // between tiers of two different resolutions.
   function fetchDestRing(latDeg, lonDeg, z, radius, fadeStrength, polyOffset) {
     const cellSize = REQUEST_SIZE / 2 ** z;
-    const ixCenter = Math.round(worldX(lonDeg) / cellSize);
-    const iyCenter = Math.round(worldY(latDeg) / cellSize);
+    // floor, not round — see ensureGrid's own comment on why.
+    const ixCenter = Math.floor(worldX(lonDeg) / cellSize);
+    const iyCenter = Math.floor(worldY(latDeg) / cellSize);
     for (let dy = -radius; dy <= radius; dy++) {
       for (let dx = -radius; dx <= radius; dx++) {
         const cellDist = Math.max(Math.abs(dx), Math.abs(dy));
@@ -1566,6 +1603,23 @@ export function mountUSOverview({
   `;
   domParent.appendChild(title);
 
+  // Only for a provider that doesn't already bake its own credit into the
+  // fetched imagery (Google does; see mapProviders.js's own comment) —
+  // Esri's terms require this text rendered separately, so it isn't
+  // optional the way the styling/placement is.
+  let attributionEl = null;
+  if (activeProvider.attribution) {
+    attributionEl = document.createElement('div');
+    attributionEl.textContent = activeProvider.attribution;
+    attributionEl.style.cssText = `
+      position: fixed; bottom: 10px; left: 12px;
+      font: 500 10px system-ui, -apple-system, sans-serif;
+      color: #f2f4f8; opacity: 0.55; text-shadow: 0 1px 4px rgba(0,0,0,0.6);
+      pointer-events: none; z-index: 20;
+    `;
+    domParent.appendChild(attributionEl);
+  }
+
   const zoomOutBtn = document.createElement('button');
   zoomOutBtn.textContent = '⤢ Zoom Out';
   zoomOutBtn.style.cssText = `
@@ -1745,6 +1799,7 @@ export function mountUSOverview({
     renderer.domElement.style.cursor = prevCursor;
     markerOverlay.dispose();
     title.remove();
+    attributionEl?.remove();
     zoomOutBtn.remove();
     centerDot.remove();
     // Hidden, not disposed — see ensureGlobeBase/setGlobeBaseVisible's own

@@ -300,6 +300,7 @@ export interface PresetSettings {
 }
 
 export interface TilesSettings {
+  provider: string;
   lodBias: number;
   wholeGlobeLodBoost: number;
 }

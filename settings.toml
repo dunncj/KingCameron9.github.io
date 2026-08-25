@@ -339,6 +339,14 @@ windStreaksDensityScale = 1
 # US specifically — this splits that same area across more, smaller tiles
 # there, each with its own smaller watermark instead.
 [tiles]
+# Which satellite-imagery source the globe overview fetches from — see
+# src/mapProviders.js for what each id actually resolves to (currently
+# "google" or "esri"). Read once at module load, not live-swappable
+# mid-session (the persistent whole-globe/US-region layers are built once
+# and cached for the app's whole lifetime — see usMap.js's own comment on
+# why — so a provider switch needs a reload to take effect, same as an
+# apiKey change would).
+provider = "google"
 lodBias = 0.7
 wholeGlobeLodBoost = 1
 
