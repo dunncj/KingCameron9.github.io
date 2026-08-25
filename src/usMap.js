@@ -1498,8 +1498,8 @@ export function mountUSOverview({
   // exact whole-US fit zoom by roughly what a handful of wheel notches
   // would. Only the fresh-mount framing, not the seed path — that one
   // already reopens on the local view's own exact saved shot.
-  const INITIAL_TILT_RAD = (-5 * Math.PI) / 180;
-  const INITIAL_ZOOM_BOOST = 1.3;
+  const INITIAL_TILT_RAD = (-8 * Math.PI) / 180;
+  const INITIAL_ZOOM_BOOST = 1.0;
   if (seed) {
     centerLat = seed.lat;
     centerLon = seed.lon;
