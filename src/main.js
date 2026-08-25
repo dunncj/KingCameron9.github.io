@@ -13,6 +13,7 @@ import {
   mountUSOverview, TILT_RAD, flyInParams, overviewStartParams, overviewFlightState,
   destPrefetchParams, hoverParams, tilesParams,
 } from './usMap.js';
+import { PROVIDERS } from './mapProviders';
 import { createCacheSystem } from './cache';
 import { createRenderQualitySystem } from './quality';
 import { movementParams, curveOptions } from './flightCurves';
@@ -838,6 +839,25 @@ async function buildDevGui() {
   // visibly move anything until you leave and come back.
   transitionFolder.add(overviewStartParams, 'tiltDeg', -30, 30, 1).name('overview start tilt (deg)');
   transitionFolder.add(overviewStartParams, 'zoomBoost', -2, 4, 0.1).name('overview start zoom boost');
+  // usMap.js reads settings.tiles.provider once at module load (the
+  // persistent whole-globe/US-region layers are built once and cached for
+  // the app's whole lifetime — see settings.toml's own comment on why), so
+  // there's no live code path to re-fetch everything under a new provider
+  // mid-session — picking a new one here reloads the page, same as editing
+  // settings.toml's provider line and refreshing would. The localStorage
+  // write is what makes the reload actually land on the new pick instead
+  // of snapping back to settings.toml's value — see usMap.js's own comment
+  // on providerOverride, the only reason this key exists.
+  transitionFolder.add(tilesParams, 'provider', Object.keys(PROVIDERS))
+    .name('tile provider (reloads)')
+    .onChange((value) => {
+      try {
+        localStorage.setItem('tilesProviderOverride', value);
+      } catch {
+        // Private-browsing/storage-blocked — reload will just fall back to settings.toml's value.
+      }
+      window.location.reload();
+    });
   // Higher = sharper globe imagery at the same camera zoom, more/heavier
   // Static Maps requests — see fetchZoomFor in usMap.js and settings.toml's
   // own comment on tiles.lodBias.

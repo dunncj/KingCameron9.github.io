@@ -32,6 +32,20 @@ import { PROVIDERS, DEFAULT_PROVIDER_ID } from './mapProviders';
 // flat Y height.
 
 const TILE_SIZE = 256;
+// A settings.toml edit takes a rebuild to reach the shipped site, but the
+// dev-GUI's "tile provider (reloads)" dropdown (see main.js) needs its pick
+// to actually survive the page reload it triggers — settings.toml's own
+// value is otherwise all that's read here, and a plain in-memory write to
+// tilesParams.provider is gone the instant the page reloads. This
+// localStorage override is that one dropdown's only reason to exist; it
+// takes priority over settings.toml precisely so picking a provider from
+// the menu keeps working across reloads without a real persistence layer.
+let providerOverride = null;
+try {
+  providerOverride = localStorage.getItem('tilesProviderOverride');
+} catch {
+  // Private-browsing/storage-blocked — falls through to settings.toml's own value.
+}
 // The active satellite-imagery source — settings.tiles.provider (see
 // settings.toml's own comment) picked once at module load, not
 // live-swappable mid-session. Every fetch function below builds its URL
@@ -41,7 +55,11 @@ const TILE_SIZE = 256;
 // provider whose cellPx matches its native tile size (Esri: 256) gets its
 // own tile x/y for free from this app's own ix/iy, no separate lat/lon
 // conversion or tile-stitching needed.
-const activeProvider = PROVIDERS[settings.tiles.provider] ?? PROVIDERS[DEFAULT_PROVIDER_ID];
+const activeProvider = PROVIDERS[providerOverride] ?? PROVIDERS[settings.tiles.provider] ?? PROVIDERS[DEFAULT_PROVIDER_ID];
+// Keeps the GUI dropdown (bound to tilesParams.provider, i.e. this same
+// settings.tiles object) showing whichever provider is actually active,
+// override included, rather than settings.toml's original value.
+settings.tiles.provider = activeProvider.id;
 const REQUEST_SIZE = activeProvider.cellPx; // one cell's request size, in pixels per axis — provider-specific (see mapProviders.js)
 const REQUEST_SCALE = activeProvider.scale; // pixel density multiplier — same geo coverage, sharper texture where the provider supports it
 const PATCH_SEGMENTS = 16; // ground patch grid resolution per axis
@@ -176,6 +194,37 @@ function worldY(lat) {
 function xToLng(x) {
   return (x / TILE_SIZE) * 360 - 180;
 }
+// A raw xToLng(...) result can land outside ±180 two different ways, both
+// near the antimeridian: ensureGrid/prefetchDestinationGrid build a cell's
+// ix by offsetting from a center cell (ixCenter + dx), which can walk past
+// the real column range while exploring the Alaska/Aleutians area (see
+// wrapCellIx below); loadWholeGlobeAtEntryDetail's ix instead sweeps a
+// fixed 0..nCellsLon-1 every time, but nCellsLon is a ceil() of a generally
+// non-integer TILE_SIZE/cellSize (true for Google's 640px cells), which
+// overshoots 360° of real coverage — deliberately, to guarantee no gap at
+// the seam (see its own comment) — so that final column's center still
+// lands past 180 even though its ix is perfectly in-range. Either way, an
+// out-of-range lon reaching Google's center= param doesn't error; it
+// silently resolves to imagery for some unrelated point (observed: a
+// request built this way at lon 185.625 returned imagery for lon 0 —
+// Africa — striped in among genuine Alaska tiles instead of it). Confirmed
+// live via this app's own network requests before writing this fix, not
+// from a spec reading of Google's API. Every lon this file hands to a
+// provider is wrapped through this on the way out.
+function wrapLon(lon) {
+  return ((lon + 180) % 360 + 360) % 360 - 180;
+}
+// Esri's buildTileUrl uses ix directly as its own tile-x, which a real XYZ
+// tile server won't have past its actual column count — wrapLon alone
+// doesn't help there since Esri never even reads the lon this file derives
+// from ix, only ix itself. Only matters for ensureGrid/prefetchDestination-
+// Grid's centered-offset ix (see wrapLon's own comment); cellsPerRow is an
+// exact 2^z for Esri (whose cellSize is a clean TILE_SIZE/2^z division), so
+// this cleanly wraps ix the same way a standard XYZ provider would.
+function wrapCellIx(ix, cellSize) {
+  const cellsPerRow = TILE_SIZE / cellSize;
+  return ((ix % cellsPerRow) + cellsPerRow) % cellsPerRow;
+}
 function yToLat(y) {
   const n = Math.PI - (2 * Math.PI * y) / TILE_SIZE;
   return (180 / Math.PI) * Math.atan(0.5 * (Math.exp(n) - Math.exp(-n)));
@@ -226,7 +275,117 @@ function sphereEast(lonDeg) {
 // as a lit ball no matter how the globe is panned/rotated, like Google
 // Earth's own space view) plus a thin Fresnel rim light standing the globe
 // out from the black background.
-function applyGlobeShading(material) {
+// toFixed guarantees a decimal point (GLSL ES rejects a bare integer
+// literal like `1` where a float is expected).
+const glslFloat = (n) => n.toFixed(4);
+
+// Builds the GLSL for activeProvider.colorGrade (mapProviders.js) once at
+// module load — a small photographic grading pipeline (white balance ->
+// exposure/contrast -> per-hue-range HSL pushes -> a shadow-only lift on
+// the raw blue channel), in that order, each stage only emitted when it's
+// not a no-op so an identity provider (Google) pays nothing for stages it
+// doesn't use rather than running through five inert matrix ops per pixel.
+// See mapProviders.js's own colorGrade comment for what each field means
+// and where the numbers came from.
+function buildColorGradeGLSL(grade) {
+  const stages = [];
+  const [wbR, wbG, wbB] = grade.whiteBalance;
+  if (wbR !== 1 || wbG !== 1 || wbB !== 1) {
+    stages.push(`diffuseColor.rgb *= vec3(${glslFloat(wbR)}, ${glslFloat(wbG)}, ${glslFloat(wbB)});`);
+  }
+  if (grade.exposure !== 1) {
+    stages.push(`diffuseColor.rgb *= ${glslFloat(grade.exposure)};`);
+  }
+  if (grade.contrast !== 1) {
+    stages.push(`diffuseColor.rgb = (diffuseColor.rgb - 0.5) * ${glslFloat(grade.contrast)} + 0.5;`);
+  }
+  if (grade.hslBands.length > 0) {
+    // lumShift is optional (omitted by every current band — see
+    // mapProviders.js's own comment on why a uniform per-band lightness
+    // lift isn't the right tool) — defaults to 0, a no-op mix.
+    const bandStages = grade.hslBands.map(({
+      hue, width, hueShift, satShift, lumShift = 0,
+    }) => `
+      {
+        float w = 1.0 - smoothstep(0.0, ${glslFloat(width)}, hueDist(hsl.x, ${glslFloat(hue)}));
+        hsl.x = mod(hsl.x + ${glslFloat(hueShift)} * w, 360.0);
+        hsl.y = clamp(hsl.y * mix(1.0, 1.0 + ${glslFloat(satShift)}, w), 0.0, 1.0);
+        hsl.z = mix(hsl.z, 1.0, ${glslFloat(lumShift)} * w);
+      }`).join('\n');
+    stages.push(`
+      {
+        vec3 hsl = rgb2hsl(clamp(diffuseColor.rgb, 0.0, 1.0));
+        ${bandStages}
+        diffuseColor.rgb = hsl2rgb(hsl);
+      }`);
+  }
+  if (grade.blueShadowLift !== 0) {
+    // Approximates a tone-curve shadow lift on the raw blue channel — the
+    // fix for water dark enough to have no real hue/saturation for the
+    // HSL bands above to grab onto (see mapProviders.js's own comment on
+    // why this exists: real imagery reading as near-black/near-colorless,
+    // e.g. the Great Lakes on Esri). 0.4 is where the lift fades to zero
+    // ("easing back to normal by midtones").
+    stages.push(`
+      diffuseColor.b += ${glslFloat(grade.blueShadowLift)} * (1.0 - smoothstep(0.0, 0.4, diffuseColor.b));`);
+  }
+  return stages.join('\n');
+}
+
+const colorGradeGLSL = buildColorGradeGLSL(activeProvider.colorGrade);
+// rgb2hsl/hsl2rgb/hueDist are only referenced when at least one hslBand
+// exists — cheap either way (a handful of scalar ops, never called if
+// unused), so always defined rather than conditionally, to keep this
+// simple.
+const HSL_GLSL_HELPERS = `
+vec3 rgb2hsl(vec3 c) {
+  float maxc = max(max(c.r, c.g), c.b);
+  float minc = min(min(c.r, c.g), c.b);
+  float l = (maxc + minc) * 0.5;
+  float d = maxc - minc;
+  float h = 0.0;
+  float s = 0.0;
+  if (d > 0.00001) {
+    s = d / (1.0 - abs(2.0 * l - 1.0));
+    if (maxc == c.r) { h = mod((c.g - c.b) / d, 6.0); }
+    else if (maxc == c.g) { h = (c.b - c.r) / d + 2.0; }
+    else { h = (c.r - c.g) / d + 4.0; }
+    h *= 60.0;
+    if (h < 0.0) { h += 360.0; }
+  }
+  return vec3(h, s, l);
+}
+vec3 hsl2rgb(vec3 hsl) {
+  float h = hsl.x; float s = hsl.y; float l = hsl.z;
+  float c = (1.0 - abs(2.0 * l - 1.0)) * s;
+  float x = c * (1.0 - abs(mod(h / 60.0, 2.0) - 1.0));
+  float m = l - c * 0.5;
+  vec3 rgb;
+  if (h < 60.0) { rgb = vec3(c, x, 0.0); }
+  else if (h < 120.0) { rgb = vec3(x, c, 0.0); }
+  else if (h < 180.0) { rgb = vec3(0.0, c, x); }
+  else if (h < 240.0) { rgb = vec3(0.0, x, c); }
+  else if (h < 300.0) { rgb = vec3(x, 0.0, c); }
+  else { rgb = vec3(c, 0.0, x); }
+  return rgb + m;
+}
+float hueDist(float h1, float h2) {
+  float d = abs(h1 - h2);
+  return min(d, 360.0 - d);
+}`;
+
+// minLight (default 0.38, every existing caller's unchanged behavior) is
+// how dark the "unlit hemisphere" side gets multiplied down to — see
+// loadPolarRings' own comment on why the polar cap/ring materials pass a
+// much higher floor: real Arctic Ocean imagery is already dark navy, and
+// the default 0.38 floor compounds with that (and with a darkening
+// colorGrade, e.g. Esri's) to crush it to near-black on screen — visually
+// indistinguishable from a rendering gap even though real imagery is
+// genuinely there. A brighter floor only matters where content is already
+// dark to begin with (open ocean); it's invisible everywhere else content
+// is mid-to-bright already, so this costs nothing for the rest of the
+// globe.
+function applyGlobeShading(material, minLight = 0.38) {
   material.onBeforeCompile = (shader) => {
     shader.vertexShader = patchShaderSource(shader.vertexShader, [
       { find: '#include <common>', replace: '#include <common>\nvarying vec3 vNormalView;' },
@@ -236,18 +395,23 @@ function applyGlobeShading(material) {
       },
     ], 'globe shading (vertex)');
     shader.fragmentShader = patchShaderSource(shader.fragmentShader, [
-      { find: '#include <common>', replace: '#include <common>\nvarying vec3 vNormalView;' },
+      { find: '#include <common>', replace: `#include <common>\nvarying vec3 vNormalView;\n${HSL_GLSL_HELPERS}` },
       {
         find: '#include <map_fragment>',
         replace: `#include <map_fragment>
         {
+          // Per-provider color grade (see mapProviders.js's colorGrade and
+          // buildColorGradeGLSL above) — identity for Google (what this
+          // scene's own lighting/rim below was tuned against); a small
+          // grading pipeline for Esri, closing the gap to Google's look.
+          ${colorGradeGLSL}
           // Fixed in view space (not world space) so the "sunlit" side always
           // faces the same on-screen direction regardless of how far the
           // globe has been panned/rotated — an unlit hemisphere always
           // shades in toward the same corner, exactly like Google Earth's.
           float ndl = dot(vNormalView, normalize(vec3(-0.35, 0.45, 0.75)));
           float lit = smoothstep(-0.15, 0.35, ndl);
-          diffuseColor.rgb *= mix(0.38, 1.05, lit);
+          diffuseColor.rgb *= mix(${glslFloat(minLight)}, 1.05, lit);
           float rim = pow(1.0 - clamp(vNormalView.z, 0.0, 1.0), 3.0);
           diffuseColor.rgb += vec3(0.5, 0.72, 1.0) * rim * 0.5;
         }`,
@@ -372,9 +536,31 @@ function buildFullGlobeGeometry() {
 // slightly SMALLER radius than every other ground layer, so it loses via
 // real geometric distance, not a depth-bias heuristic, and it only exists
 // in a small band near each pole — nowhere else to go wrong.
-const POLAR_CAP_LAT = 80; // generous margin past whatever loadWholeGlobeAtEntryDetail's edge-cell exclusion leaves uncovered
+// Deliberately NOT tightened to loadPolarRings' own ~84.7-85.0° reach:
+// this disc is the fallback for the *whole* ring band, not just the
+// genuinely-unreachable sliver above it. loadPolarRings' several levels
+// tile close to flush against each other and against
+// loadWholeGlobeAtEntryDetail's own edge (see safeEdgeRow), but aren't
+// guaranteed gap-free, and Google's own complete fallback sphere
+// (buildFullGlobeGeometry) — which used to quietly mask any such gap with
+// at least a coarse, reasonably-colored image — doesn't exist at all for
+// a provider without supportsWholeWorldImage (Esri: confirmed live, a
+// real gap between ring levels rendered as a stark black ring with
+// nothing behind it to fall through to). 80 comfortably undercuts
+// loadWholeGlobeAtEntryDetail's own single-row reach at any zoom this app
+// actually uses, so this disc reliably sits behind the entire ring band
+// as a real safety net — invisible wherever a ring loads over it, only
+// ever showing (now correctly colored and lit, see POLAR_RING_MIN_LIGHT)
+// on whatever gap one leaves.
+const POLAR_CAP_LAT = 80;
 const POLAR_CAP_RADIUS = EARTH_RADIUS_SCENE * 0.9998;
-const POLAR_CAP_COLOR = 0x142a4d; // plausible dark polar-ocean fallback — no texture/UV needed
+// Starting guess only — loadPolarRings' onColorSample recolors each
+// hemisphere's cap from the real imagery its own rings just fetched right
+// next to it (open ocean, sea ice, the Antarctic ice sheet — whatever's
+// actually there) the moment those tiles load, same technique as
+// sampleAverageColor's own comment describes. This fixed icy off-white is
+// only ever seen for the brief moment before that first sample arrives.
+const POLAR_CAP_COLOR = 0xeef4f8;
 
 function buildPolarCapGeometry(loLat, hiLat) {
   const segs = 16;
@@ -409,17 +595,41 @@ function buildPolarCapGeometry(loLat, hiLat) {
   return geo;
 }
 
+// Incremental average: each new sample nudges the cap's color a little
+// rather than snapping straight to it, so one unusually bright/dark tile
+// (a cloud, a shadow) among many can't single-handedly yank the whole cap
+// off — converges within a handful of samples, which loadPolarRings
+// supplies plenty of (nCellsLon per ring level, three levels).
+function nudgeCapColor(mesh, sample, sampleCount) {
+  const t = 1 / sampleCount;
+  const c = mesh.material.color;
+  c.r += (sample.r / 255 - c.r) * t;
+  c.g += (sample.g / 255 - c.g) * t;
+  c.b += (sample.b / 255 - c.b) * t;
+}
+
 function buildPolarCaps(scene) {
   const meshes = [];
+  const sampleCounts = [0, 0]; // parallel to meshes: [north, south]
   for (const [lo, hi] of [[POLAR_CAP_LAT, 90], [-90, -POLAR_CAP_LAT]]) {
     const geometry = buildPolarCapGeometry(lo, hi);
     const material = new MeshBasicMaterial({ color: POLAR_CAP_COLOR, toneMapped: false });
-    applyGlobeShading(material);
+    // Same brighter floor as loadPolarRings' own POLAR_RING_MIN_LIGHT (see
+    // its comment) — this cap sits in the exact same region, so it's
+    // subject to the exact same near-black-crush risk on a dark sample.
+    applyGlobeShading(material, POLAR_RING_MIN_LIGHT);
     const mesh = new Mesh(geometry, material);
     scene.add(mesh);
     meshes.push(mesh);
   }
-  return meshes;
+  // meshes[0] is north ([POLAR_CAP_LAT, 90]), meshes[1] is south — matches
+  // loadPolarRings' own poleSign convention (1 = north, -1 = south).
+  const onColorSample = (poleSign, sample) => {
+    const idx = poleSign > 0 ? 0 : 1;
+    sampleCounts[idx] += 1;
+    nudgeCapColor(meshes[idx], sample, sampleCounts[idx]);
+  };
+  return { meshes, onColorSample };
 }
 
 // The US borders (Canada and Mexico), draped directly onto the globe as
@@ -483,7 +693,12 @@ function buildBorderLines(scene) {
 // mount/dispose after that.
 let globeBase = null; // { baseGlobeMesh: Mesh|null, wholeGlobeCache: Map, wholeGlobeZ: number } | null until first mount
 
-function fetchWholeGlobeCell(scene, apiKey, z, ix, iy, cellSize, key, cache) {
+// offset, onImage, and minLight (defaults: 1, undefined, 0.38 — all
+// loadWholeGlobeAtEntryDetail's own untouched behavior) exist only for
+// loadPolarRings below — see its own comment for why a per-call
+// polygonOffset, a raw-pixel hook, and a brighter shading floor are all
+// needed there.
+function fetchWholeGlobeCell(scene, apiKey, z, ix, iy, cellSize, key, cache, offset = 1, onImage, minLight = 0.38) {
   if (activeProvider.requiresApiKey && !apiKey) return;
   cache.set(key, { mesh: null });
   // +0.5: cell (ix, iy) spans [ix, ix+1) * cellSize in zoom-0 world-space,
@@ -493,7 +708,9 @@ function fetchWholeGlobeCell(scene, apiKey, z, ix, iy, cellSize, key, cache) {
   // tile numbering whenever cellSize matches that provider's native tile
   // size (see mapProviders.js's own top comment). Harmless for Google,
   // which only wants a center point and doesn't care what grid it's on.
-  const lon = xToLng((ix + 0.5) * cellSize);
+  // wrapLon: this loop's own final ix can still land past 180° — see
+  // wrapLon's own comment on why.
+  const lon = wrapLon(xToLng((ix + 0.5) * cellSize));
   const lat = yToLat((iy + 0.5) * cellSize);
   const url = activeProvider.buildTileUrl({
     lat, lon, z, ix, iy, apiKey,
@@ -512,12 +729,13 @@ function fetchWholeGlobeCell(scene, apiKey, z, ix, iy, cellSize, key, cache) {
     // comment on WHOLE_GLOBE_ENTRY_RADIUS for why that gap was a bug).
     const material = new MeshBasicMaterial({
       map: texture, toneMapped: false,
-      polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1,
+      polygonOffset: true, polygonOffsetFactor: offset, polygonOffsetUnits: offset,
     });
-    applyGlobeShading(material);
+    applyGlobeShading(material, minLight);
     const mesh = new Mesh(geometry, material);
     scene.add(mesh);
     cache.set(key, { mesh });
+    onImage?.(img);
   };
   img.onerror = () => {
     console.error('US overview: whole-globe tile failed to load (check API key / Static Maps API enablement)');
@@ -561,6 +779,96 @@ function loadWholeGlobeAtEntryDetail(scene, apiKey, z, cache) {
   }
 }
 
+// Real per-cell imagery can never reach the true pole — Mercator's own y
+// coordinate genuinely runs to infinity there, not a fetching choice (see
+// loadWholeGlobeAtEntryDetail's own comment) — but it CAN get much closer
+// to the ±85.0511° edge than that function's single, fairly coarse zoom
+// does, simply by using smaller cells there. This finds, at a given
+// cellSize, the row nearest each pole whose fetched *center* (not just its
+// footprint) still stays within ±BASE_GLOBE_LAT_LIMIT — solved directly
+// against the same value fetchWholeGlobeCell hands Google/Esri, rather
+// than reasoning about a cell's footprint edges the way
+// loadWholeGlobeAtEntryDetail's iyMin/iyMax do, because an out-of-range
+// value handed to a provider doesn't error, it silently resolves to
+// something else entirely (confirmed today via wrapLon's own fix for the
+// exact same failure mode on the longitude axis — see its comment). A
+// plain linear search: nRows never exceeds a few hundred at the zooms
+// loadPolarRings actually uses, so this costs nothing.
+function safeEdgeRow(cellSize, poleSign) {
+  const nRows = TILE_SIZE / cellSize;
+  if (poleSign > 0) {
+    for (let iy = 0; iy < nRows; iy++) {
+      if (yToLat((iy + 0.5) * cellSize) <= BASE_GLOBE_LAT_LIMIT) return iy;
+    }
+  } else {
+    for (let iy = Math.floor(nRows) - 1; iy >= 0; iy--) {
+      if (yToLat((iy + 0.5) * cellSize) >= -BASE_GLOBE_LAT_LIMIT) return iy;
+    }
+  }
+  return null;
+}
+
+// Downsamples a loaded tile image to a single average color via a 1x1
+// canvas draw (cheap: the browser's own image scaling does the averaging,
+// no manual pixel loop) — used to color buildPolarCaps' small remaining
+// flat disc from whatever loadPolarRings actually found up there (open
+// ocean, sea ice, Antarctic ice sheet) instead of a fixed guess.
+function sampleAverageColor(img) {
+  const canvas = document.createElement('canvas');
+  canvas.width = 1;
+  canvas.height = 1;
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(img, 0, 0, 1, 1);
+  const [r, g, b] = ctx.getImageData(0, 0, 1, 1).data;
+  return { r, g, b };
+}
+
+// Three more, still finer imagery layers hugging each pole, each reaching
+// closer to ±85.0511° than the last (see safeEdgeRow) — layered on top of
+// loadWholeGlobeAtEntryDetail's own layer with progressively smaller
+// polygonOffset so the finest ring always wins the depth test in whatever
+// each ring overlaps (adjacent rings mostly tile flush by construction —
+// see safeEdgeRow — but aren't guaranteed to; overlap here is harmless,
+// a gap is not, which is why buildPolarCaps' own disc still sits behind
+// all of this as the fallback for both). onColorSample feeds
+// sampleAverageColor's output for every loaded ring tile back to the
+// caller, which is how buildPolarCaps' own flat remainder ends up colored
+// from whatever's actually up there instead of a fixed guess.
+//
+// POLAR_RING_MIN_LIGHT (well above applyGlobeShading's normal 0.38
+// default): found live, not guessed — a top-down view of the Arctic ring
+// showed a stark black band where real (correctly-fetched, verified via
+// its own network request) dark-navy ocean imagery should have been.
+// Real polar water/ice is legitimately dark in places, and stacks with
+// this provider's own colorGrade (also a darkening correction for Esri —
+// see mapProviders.js) — compounded with the normal 0.38 unlit-hemisphere
+// floor, that crushed real imagery to near-black, visually indistinguishable
+// from a rendering gap. A brighter floor here only matters where content is
+// already dark; it's invisible everywhere content is mid-to-bright already.
+const POLAR_RING_LEVELS = 3;
+const POLAR_RING_MIN_LIGHT = 0.8;
+
+function loadPolarRings(scene, apiKey, baseZ, cache, onColorSample) {
+  for (let level = 1; level <= POLAR_RING_LEVELS; level++) {
+    const z = baseZ + level;
+    const cellSize = REQUEST_SIZE / 2 ** z;
+    const nCellsLon = Math.max(1, Math.ceil(TILE_SIZE / cellSize));
+    const offset = 1 - level * 0.1; // finer ring = smaller offset = wins ties against coarser layers
+    for (const poleSign of [1, -1]) {
+      const iy = safeEdgeRow(cellSize, poleSign);
+      if (iy === null) continue;
+      for (let ix = 0; ix < nCellsLon; ix++) {
+        const key = `${z}_${ix}_${iy}`; // z-qualified: distinct ring levels' (ix, iy) values otherwise collide
+        if (!cache.has(key)) {
+          fetchWholeGlobeCell(scene, apiKey, z, ix, iy, cellSize, key, cache, offset, (img) => {
+            onColorSample(poleSign, sampleAverageColor(img));
+          }, POLAR_RING_MIN_LIGHT);
+        }
+      }
+    }
+  }
+}
+
 // A second, finer whole-globe-entry layer, US-only — same idea as
 // fetchWholeGlobeCell/loadWholeGlobeAtEntryDetail above, but bounded to
 // US_FRAME_BOUNDS and fetched at tilesParams.wholeGlobeLodBoost sharper
@@ -572,7 +880,9 @@ function loadWholeGlobeAtEntryDetail(scene, apiKey, z, cache) {
 function fetchUSRegionCell(scene, apiKey, z, ix, iy, cellSize, key, cache) {
   if (activeProvider.requiresApiKey && !apiKey) return;
   cache.set(key, { mesh: null });
-  const lon = xToLng((ix + 0.5) * cellSize);
+  // wrapLon: never actually triggers within US_FRAME_BOUNDS, applied for
+  // the same reason as fetchWholeGlobeCell's identical loop shape.
+  const lon = wrapLon(xToLng((ix + 0.5) * cellSize));
   const lat = yToLat((iy + 0.5) * cellSize);
   const url = activeProvider.buildTileUrl({
     lat, lon, z, ix, iy, apiKey,
@@ -678,6 +988,7 @@ function ensureGlobeBase(scene, apiKey, entryZoomFetchZoom, usRegionZoomFetchZoo
       baseGlobeMesh: null,
       wholeGlobeCache: new Map(),
       usRegionCache: new Map(),
+      polarRingCache: new Map(),
       wholeGlobeZ: entryZoomFetchZoom,
       polarCapMeshes: [],
       borderLines: [],
@@ -685,7 +996,9 @@ function ensureGlobeBase(scene, apiKey, entryZoomFetchZoom, usRegionZoomFetchZoo
     fetchBaseGlobe(scene, apiKey, (mesh) => { globeBase.baseGlobeMesh = mesh; });
     loadWholeGlobeAtEntryDetail(scene, apiKey, entryZoomFetchZoom, globeBase.wholeGlobeCache);
     loadUSRegionAtBoostedDetail(scene, apiKey, usRegionZoomFetchZoom, globeBase.usRegionCache);
-    globeBase.polarCapMeshes = buildPolarCaps(scene);
+    const { meshes: polarCapMeshes, onColorSample } = buildPolarCaps(scene);
+    globeBase.polarCapMeshes = polarCapMeshes;
+    loadPolarRings(scene, apiKey, entryZoomFetchZoom, globeBase.polarRingCache, onColorSample);
     globeBase.borderLines = buildBorderLines(scene);
   }
   setGlobeBaseVisible(true);
@@ -699,6 +1012,9 @@ function setGlobeBaseVisible(visible) {
     if (entry.mesh) entry.mesh.visible = visible;
   }
   for (const entry of globeBase.usRegionCache.values()) {
+    if (entry.mesh) entry.mesh.visible = visible;
+  }
+  for (const entry of globeBase.polarRingCache.values()) {
     if (entry.mesh) entry.mesh.visible = visible;
   }
   for (const mesh of globeBase.polarCapMeshes) mesh.visible = visible;
@@ -1071,17 +1387,27 @@ export function mountUSOverview({
     // tilesParams.lodBias (see settings.toml) shifts the result up for
     // sharper imagery at the same camera zoom — the -0.6 below is the
     // original fixed margin this used before that became tunable.
-    return Math.min(20, Math.max(0, Math.round(clamped - offset - 0.6 + bias)));
+    // activeProvider.lodBiasOffset (see mapProviders.js) is a fixed
+    // per-provider correction on top of that — applied here rather than
+    // folded into the bias default so it still lands on the whole-globe/
+    // US-region layers' own explicit bias values (0 / wholeGlobeLodBoost),
+    // not just the live per-frame grid's default.
+    return Math.min(20, Math.max(0, Math.round(
+      clamped - offset - 0.6 + bias + (activeProvider.lodBiasOffset ?? 0),
+    )));
   }
 
   function fetchGridCell(z, ix, iy, cellSize, generation) {
     if (activeProvider.requiresApiKey && !apiKey) return;
-    const key = `${ix}_${iy}`;
+    const key = `${ix}_${iy}`; // raw (unwrapped) ix — CACHE_KEEP_RADIUS eviction below needs a continuous coordinate, not a wrapped one
     tileCache.set(key, { mesh: null });
-    const lon = xToLng((ix + 0.5) * cellSize);
+    // See wrapCellIx's own comment — ix here is ixCenter+dx and can run
+    // past the real column range near the antimeridian.
+    const wrappedIx = wrapCellIx(ix, cellSize);
+    const lon = wrapLon(xToLng((wrappedIx + 0.5) * cellSize));
     const lat = yToLat((iy + 0.5) * cellSize);
     const url = activeProvider.buildTileUrl({
-      lat, lon, z, ix, iy, apiKey,
+      lat, lon, z, ix: Math.round(wrappedIx), iy, apiKey,
     });
     const img = new Image();
     img.crossOrigin = 'anonymous';
@@ -1289,7 +1615,11 @@ export function mountUSOverview({
     // here first owns it.
     if (destTileCache.has(key)) return;
     destTileCache.set(key, { mesh: null });
-    const lon = xToLng((ix + 0.5) * cellSize);
+    // See wrapCellIx's own comment — ix here is offset from a destination
+    // center cell and can run past the real column range near the
+    // antimeridian, same as fetchGridCell's.
+    const wrappedIx = wrapCellIx(ix, cellSize);
+    const lon = wrapLon(xToLng((wrappedIx + 0.5) * cellSize));
     const lat = yToLat((iy + 0.5) * cellSize);
     // scale: 1 here (see buildTileUrl's own comment on this override) —
     // these tiers are already deliberately coarse/blurry by design (see
@@ -1297,7 +1627,7 @@ export function mountUSOverview({
     // render it softened and often partly occluded by the finer tier on
     // top is pure waste.
     const url = activeProvider.buildTileUrl({
-      lat, lon, z, ix, iy, apiKey, scale: 1,
+      lat, lon, z, ix: Math.round(wrappedIx), iy, apiKey, scale: 1,
     });
     const img = new Image();
     img.crossOrigin = 'anonymous';
@@ -1634,7 +1964,12 @@ export function mountUSOverview({
     stopMomentum();
     centerLat = (US_FRAME_BOUNDS.south + US_FRAME_BOUNDS.north) / 2;
     centerLon = (US_FRAME_BOUNDS.west + US_FRAME_BOUNDS.east) / 2;
-    zoom = Math.min(maxZoom, Math.max(minZoom, initialUSFitZoom()));
+    // Same shared restingZoom()/restingAzimuthRad flyOut and a fresh mount
+    // both land on (see their own comment) — used to snap to a plain
+    // unboosted fit with no azimuth reset, a third framing that didn't
+    // match either of those.
+    zoom = restingZoom();
+    tiltAzimuthRad = restingAzimuthRad;
     applyCamera();
     ensureGrid();
   });
@@ -1649,8 +1984,7 @@ export function mountUSOverview({
   // flyTo/flyOut, resize) rather than needing a matching call at each one.
   const ZOOM_OUT_VISIBLE_EPSILON = 0.05;
   function updateZoomOutButtonVisibility() {
-    const restZoom = Math.min(maxZoom, Math.max(minZoom, initialUSFitZoom()));
-    zoomOutBtn.style.display = zoom > restZoom + ZOOM_OUT_VISIBLE_EPSILON ? '' : 'none';
+    zoomOutBtn.style.display = zoom > restingZoom() + ZOOM_OUT_VISIBLE_EPSILON ? '' : 'none';
   }
 
   // Debug reference point: a fixed dot at the exact geometric center of the
@@ -1689,8 +2023,22 @@ export function mountUSOverview({
   // (see settings.toml) rotates the camera's trailing offset that many
   // degrees left of north (negative in applyCamera's own tiltAzimuthRad
   // convention — see its comment), and .zoomBoost nudges past the exact
-  // whole-US fit zoom. Only the fresh-mount framing, not the seed path —
-  // that one already reopens on the local view's own exact saved shot.
+  // whole-US fit zoom. restingAzimuthRad/restingZoom (below) are this same
+  // framing, shared with flyOut's own destination — the two used to be
+  // tuned independently (flyOut settled dead-north at the plain unboosted
+  // fit instead) and visibly disagreed about where the overview's resting
+  // shot actually was depending on which path got you there. Only the
+  // fresh-mount framing reads overviewStartParams directly, not the seed
+  // path — that one already reopens on the local view's own exact saved
+  // shot.
+  const restingAzimuthRad = (-overviewStartParams.tiltDeg * Math.PI) / 180;
+  // Split the difference between the two zoom levels these paths used to
+  // land on independently (fresh mount: fit + full zoomBoost; flyOut: fit
+  // + 0) rather than picking one — half the boost, not the full amount.
+  const restingZoom = () => Math.min(
+    maxZoom,
+    Math.max(minZoom, initialUSFitZoom() + overviewStartParams.zoomBoost / 2),
+  );
   if (seed) {
     centerLat = seed.lat;
     centerLon = seed.lon;
@@ -1698,12 +2046,10 @@ export function mountUSOverview({
   } else {
     centerLat = (US_FRAME_BOUNDS.south + US_FRAME_BOUNDS.north) / 2;
     centerLon = (US_FRAME_BOUNDS.west + US_FRAME_BOUNDS.east) / 2;
-    tiltAzimuthRad = (-overviewStartParams.tiltDeg * Math.PI) / 180;
+    tiltAzimuthRad = restingAzimuthRad;
   }
   computeZoomBounds();
-  zoom = seed
-    ? Math.min(maxZoom, Math.max(minZoom, seed.zoom))
-    : Math.min(maxZoom, Math.max(minZoom, initialUSFitZoom() + overviewStartParams.zoomBoost));
+  zoom = seed ? Math.min(maxZoom, Math.max(minZoom, seed.zoom)) : restingZoom();
   entryZoom = seed ? Math.min(maxZoom, Math.max(minZoom, initialUSFitZoom())) : zoom;
   resize();
   wholeGlobeZ = ensureGlobeBase(
@@ -1742,9 +2088,14 @@ export function mountUSOverview({
     const startAzimuth = tiltAzimuthRad;
     const destLat = (US_FRAME_BOUNDS.south + US_FRAME_BOUNDS.north) / 2;
     const destLon = (US_FRAME_BOUNDS.west + US_FRAME_BOUNDS.east) / 2;
-    const destZoom = initialUSFitZoom();
-    // Shortest-path back to north — see flyTo's identical comment.
-    let azimuthDelta = 0 - startAzimuth;
+    // Same restingZoom()/restingAzimuthRad a fresh mount opens on (see
+    // their own comment) — used to be a plain unboosted fit and dead
+    // north here instead, so the overview's resting shot didn't actually
+    // match depending on whether you arrived by a fresh mount or by
+    // zooming back out from a local view.
+    const destZoom = restingZoom();
+    // Shortest-path back to restingAzimuthRad — see flyTo's identical comment on 0.
+    let azimuthDelta = restingAzimuthRad - startAzimuth;
     azimuthDelta = ((azimuthDelta % (2 * Math.PI)) + 3 * Math.PI) % (2 * Math.PI) - Math.PI;
     const { ms: flyMs, panMs } = flyInParams;
     // The reverse of flyTo's own pairing (see getMovementCurve/movementParams

@@ -346,7 +346,7 @@ windStreaksDensityScale = 1
 # and cached for the app's whole lifetime — see usMap.js's own comment on
 # why — so a provider switch needs a reload to take effect, same as an
 # apiKey change would).
-provider = "google"
+provider = "esri"
 lodBias = 0.7
 wholeGlobeLodBoost = 1
 
