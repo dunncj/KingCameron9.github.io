@@ -43,7 +43,6 @@ const LABEL_BORDER = 'rgba(255,255,255,0.25)';
 const LABEL_BORDER_HOVER = 'rgba(255,255,255,0.7)';
 const CONNECTOR_COLOR = 'rgba(255,255,255,0.5)';
 const CONNECTOR_COLOR_HOVER = 'rgba(255,255,255,0.95)';
-const DOT_HOVER_SCALE = 1.8;
 
 export function createMarkerOverlay(
   container: HTMLElement,
@@ -82,7 +81,6 @@ export function createMarkerOverlay(
       background-size: 100% 100%;
       image-rendering: pixelated;
       cursor: pointer; user-select: none;
-      transition: transform 0.12s ease;
     `;
 
     // Positioning anchor for this marker's label + connector, in the
@@ -143,13 +141,10 @@ export function createMarkerOverlay(
 
     // Hovering either half highlights both — they read as one marker, so
     // the reaction shouldn't depend on which part the cursor happens to be
-    // over. The dot scales up (its shape is a baked-in bitmap, not
-    // something CSS can restyle directly); the label goes bold with a
-    // brighter border/background, the usual "this is interactive" cues.
+    // over. Only the label (bold text, brighter border/background) and its
+    // leader line react; the dot itself stays put — it scaled up in an
+    // earlier pass and didn't read well, so it's excluded here on purpose.
     const setHovered = (hovered: boolean) => {
-      pinEl.style.transform = hovered
-        ? `translate(-50%, -50%) scale(${DOT_HOVER_SCALE})`
-        : 'translate(-50%, -50%)';
       labelEl.style.fontWeight = hovered ? '800' : '600';
       labelEl.style.backgroundColor = hovered ? LABEL_BG_HOVER : LABEL_BG;
       labelEl.style.borderColor = hovered ? LABEL_BORDER_HOVER : LABEL_BORDER;

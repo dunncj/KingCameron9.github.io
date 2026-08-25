@@ -29,8 +29,8 @@ export interface DotIconOptions {
 // fixed location markers).
 export function createPixelDotIconUrl({
   fill = '#ffffff',
-  outline = '#8b0000',
-  scale = 3,
+  outline = '#ff3b30',
+  scale = 2,
 }: DotIconOptions = {}): { url: string; size: number } {
   const canvas = document.createElement('canvas');
   canvas.width = DOT_SIZE;
