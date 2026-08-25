@@ -10,7 +10,8 @@ import { buildPlayerPanel } from './player.js';
 import { buildDevConsole } from './devconsole';
 import { createLocalCameraControl } from './camera/localCameraControl';
 import {
-  mountUSOverview, TILT_RAD, flyInParams, overviewFlightState, destPrefetchParams, hoverParams,
+  mountUSOverview, TILT_RAD, flyInParams, overviewStartParams, overviewFlightState,
+  destPrefetchParams, hoverParams,
 } from './usMap.js';
 import { createCacheSystem } from './cache';
 import { createRenderQualitySystem } from './quality';
@@ -832,6 +833,11 @@ async function buildDevGui() {
   transitionFolder.add(flyInParams, 'zoom', 14, 20.5, 0.1).name('overview zoom-in depth');
   transitionFolder.add(flyInParams, 'ms', 400, 6000, 50).name('overview zoom-in ms');
   transitionFolder.add(flyInParams, 'panMs', 100, 2000, 50).name('overview centering ms');
+  // Only affects the *next* fresh mount (see mountUSOverview's own
+  // comment) — dragging these while already inside the overview won't
+  // visibly move anything until you leave and come back.
+  transitionFolder.add(overviewStartParams, 'tiltDeg', -30, 30, 1).name('overview start tilt (deg)');
+  transitionFolder.add(overviewStartParams, 'zoomBoost', -2, 4, 0.1).name('overview start zoom boost');
   // Each movement (pan/zoom, entering/leaving) picks its own curve shape
   // and its own speed through that curve independently — see
   // flightCurves.ts's movementParams and getMovementCurve.

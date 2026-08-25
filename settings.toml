@@ -86,6 +86,16 @@ zoom = 18
 ms = 2200
 panMs = 700
 
+# The overview's opening framing, fresh-mount only — not the seed path
+# (returning from local view reopens on that view's own exact saved shot).
+# tiltDeg rotates the camera's trailing azimuth this many degrees left
+# (negative) of dead-on north-facing — see usMap.js's own comment on
+# tiltAzimuthRad for the sign convention. zoomBoost is added on top of the
+# exact whole-US-fit zoom level.
+[transitions.overviewStart]
+tiltDeg = 8
+zoomBoost = 1.0
+
 [transitions.movements.panIn]
 curve = "hyperbolic-out"
 speed = 1

@@ -65,6 +65,11 @@ export const TILT_RAD = (12 * Math.PI) / 180;
 // getMovementCurve's own comment on why it's snapshotted once per flight
 // rather than read live).
 export const flyInParams = settings.transitions.flyIn;
+// Same live-settings-object pattern as flyInParams above — mountUSOverview
+// reads tiltDeg/zoomBoost from this directly (not a copy), so retuning it
+// via the dev GUI or ":settings set transitions.overviewStart.<key> <value>"
+// takes effect on the next mount without a source edit.
+export const overviewStartParams = settings.transitions.overviewStart;
 
 // Read every frame by main.js's tick() to drive the zoom-blur post pass
 // (see updateZoomBlur) — this module owns the overview's own rAF loop, so
@@ -1491,15 +1496,12 @@ export function mountUSOverview({
   // animates the actual zoom-out from there.
   //
   // A dead-on north-facing, exactly-fit shot read as flatter/less centered
-  // than a slight turn and a bit more depth — INITIAL_TILT_RAD rotates the
-  // camera's trailing offset a bit counterclockwise (see applyCamera's own
-  // comment on tiltAzimuthRad — negative turns the look direction from
-  // north toward west, i.e. "left"), and INITIAL_ZOOM_BOOST nudges past the
-  // exact whole-US fit zoom by roughly what a handful of wheel notches
-  // would. Only the fresh-mount framing, not the seed path — that one
-  // already reopens on the local view's own exact saved shot.
-  const INITIAL_TILT_RAD = (-8 * Math.PI) / 180;
-  const INITIAL_ZOOM_BOOST = 1.0;
+  // than a slight turn and a bit more depth — overviewStartParams.tiltDeg
+  // (see settings.toml) rotates the camera's trailing offset that many
+  // degrees left of north (negative in applyCamera's own tiltAzimuthRad
+  // convention — see its comment), and .zoomBoost nudges past the exact
+  // whole-US fit zoom. Only the fresh-mount framing, not the seed path —
+  // that one already reopens on the local view's own exact saved shot.
   if (seed) {
     centerLat = seed.lat;
     centerLon = seed.lon;
@@ -1507,12 +1509,12 @@ export function mountUSOverview({
   } else {
     centerLat = (US_FRAME_BOUNDS.south + US_FRAME_BOUNDS.north) / 2;
     centerLon = (US_FRAME_BOUNDS.west + US_FRAME_BOUNDS.east) / 2;
-    tiltAzimuthRad = INITIAL_TILT_RAD;
+    tiltAzimuthRad = (-overviewStartParams.tiltDeg * Math.PI) / 180;
   }
   computeZoomBounds();
   zoom = seed
     ? Math.min(maxZoom, Math.max(minZoom, seed.zoom))
-    : Math.min(maxZoom, Math.max(minZoom, initialUSFitZoom() + INITIAL_ZOOM_BOOST));
+    : Math.min(maxZoom, Math.max(minZoom, initialUSFitZoom() + overviewStartParams.zoomBoost));
   entryZoom = seed ? Math.min(maxZoom, Math.max(minZoom, initialUSFitZoom())) : zoom;
   resize();
   wholeGlobeZ = ensureGlobeBase(scene, apiKey, fetchZoomFor(entryZoom));
