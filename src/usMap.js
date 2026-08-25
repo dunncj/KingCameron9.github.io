@@ -1489,6 +1489,17 @@ export function mountUSOverview({
   // overview opens already on that same close-in shot instead of an
   // instant jump back out to the continental view, and flyOut (below)
   // animates the actual zoom-out from there.
+  //
+  // A dead-on north-facing, exactly-fit shot read as flatter/less centered
+  // than a slight turn and a bit more depth — INITIAL_TILT_RAD rotates the
+  // camera's trailing offset a bit clockwise (see applyCamera's own comment
+  // on tiltAzimuthRad — positive turns the look direction from north toward
+  // east, i.e. "right"), and INITIAL_ZOOM_BOOST nudges past the exact
+  // whole-US fit zoom by roughly what a handful of wheel notches would.
+  // Only the fresh-mount framing, not the seed path — that one already
+  // reopens on the local view's own exact saved shot.
+  const INITIAL_TILT_RAD = (15 * Math.PI) / 180;
+  const INITIAL_ZOOM_BOOST = 0.8;
   if (seed) {
     centerLat = seed.lat;
     centerLon = seed.lon;
@@ -1496,9 +1507,12 @@ export function mountUSOverview({
   } else {
     centerLat = (US_FRAME_BOUNDS.south + US_FRAME_BOUNDS.north) / 2;
     centerLon = (US_FRAME_BOUNDS.west + US_FRAME_BOUNDS.east) / 2;
+    tiltAzimuthRad = INITIAL_TILT_RAD;
   }
   computeZoomBounds();
-  zoom = seed ? Math.min(maxZoom, Math.max(minZoom, seed.zoom)) : Math.min(maxZoom, Math.max(minZoom, initialUSFitZoom()));
+  zoom = seed
+    ? Math.min(maxZoom, Math.max(minZoom, seed.zoom))
+    : Math.min(maxZoom, Math.max(minZoom, initialUSFitZoom() + INITIAL_ZOOM_BOOST));
   entryZoom = seed ? Math.min(maxZoom, Math.max(minZoom, initialUSFitZoom())) : zoom;
   resize();
   wholeGlobeZ = ensureGlobeBase(scene, apiKey, fetchZoomFor(entryZoom));
