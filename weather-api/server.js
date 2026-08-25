@@ -1,21 +1,12 @@
 import { createServer } from 'node:http';
 import { LOCATIONS, CONDITIONS, findLocation } from './locations.js';
+import { currentState } from './db.js';
 
 const PORT = process.env.PORT || 4000;
 
-// Small deterministic hash so the "current" condition for a location stays
-// stable within an hour instead of flipping on every request, without
-// needing any real weather source or stored state.
-function seededPick(list, seed) {
-  let hash = 0;
-  for (let i = 0; i < seed.length; i++) hash = (hash * 31 + seed.charCodeAt(i)) >>> 0;
-  return list[hash % list.length];
-}
-
 function exampleWeatherFor(location) {
-  const hourBucket = Math.floor(Date.now() / (1000 * 60 * 60));
-  const condition = seededPick(CONDITIONS, `${location.slug}-${hourBucket}`);
-  const jitter = seededPick([-2, -1, 0, 1, 2], `${location.slug}-${hourBucket}-jitter`);
+  const state = currentState(location.slug);
+  const condition = CONDITIONS.find((c) => c.key === state.conditionKey);
 
   return {
     location: location.label,
@@ -25,11 +16,12 @@ function exampleWeatherFor(location) {
     condition: condition.label,
     conditionKey: condition.key,
     icon: condition.icon,
-    tempF: location.baseTempF + condition.tempDeltaF + jitter,
+    tempF: location.baseTempF + condition.tempDeltaF + state.tempJitter,
     humidityPct: 40 + Math.abs(condition.tempDeltaF) * 4,
-    windMph: 5 + Math.abs(condition.tempDeltaF),
-    windDirectionDeg: (hourBucket * 37) % 360,
-    observedAt: new Date().toISOString(),
+    windMph: 5 + Math.abs(condition.tempDeltaF) + (condition.windBoostMph || 0),
+    windDirectionDeg: state.windDirDeg,
+    observedAt: state.updatedAt,
+    changesAt: state.nextChangeAt,
     source: 'example-data',
   };
 }

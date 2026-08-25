@@ -34,15 +34,13 @@ export const LOCATIONS = [
   },
 ];
 
+// Kept deliberately small for now (no precipitation/storm states) — see
+// db.js, which rolls the current condition per location on a random
+// 15-120min timer instead of computing it fresh on every request.
 export const CONDITIONS = [
-  { key: 'clear', label: 'Clear', tempDeltaF: 4, icon: '01d' },
-  { key: 'partlyCloudy', label: 'Partly Cloudy', tempDeltaF: 1, icon: '02d' },
+  { key: 'clear', label: 'Clear', tempDeltaF: 3, icon: '01d' },
   { key: 'cloudy', label: 'Cloudy', tempDeltaF: -1, icon: '03d' },
-  { key: 'overcast', label: 'Overcast', tempDeltaF: -3, icon: '04d' },
-  { key: 'showers', label: 'Showers', tempDeltaF: -4, icon: '09d' },
-  { key: 'rain', label: 'Rain', tempDeltaF: -5, icon: '10d' },
-  { key: 'thunderstorm', label: 'Thunderstorm', tempDeltaF: -6, icon: '11d' },
-  { key: 'snow', label: 'Snow', tempDeltaF: -10, icon: '13d' },
+  { key: 'lightBreeze', label: 'Light Breeze', tempDeltaF: 0, icon: '50d', windBoostMph: 6 },
 ];
 
 export function findLocation(slug) {

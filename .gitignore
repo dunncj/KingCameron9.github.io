@@ -3,3 +3,5 @@ dist
 .DS_Store
 .env
 .env.local
+weather-api/*.db
+weather-api/*.db-journal
