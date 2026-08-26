@@ -1,3 +1,22 @@
+// TEMP / SCAFFOLD: this Node server is not deployed anywhere and the live
+// site never calls it. GitHub Pages only serves static files, so a
+// long-running http.createServer here has nowhere to run in production.
+// The live site's own weather (src/weather/) is a fully client-side
+// simulation and doesn't know this folder exists.
+//
+// public/api/locations.json and public/api/weather.json are static,
+// point-in-time snapshots generated from this same code (see the bottom of
+// this comment for how) so a request to /api/locations or /api/weather on
+// the deployed site returns *something* instead of 404 — but they don't
+// update themselves; re-run the generation step to refresh them.
+//
+// TODO: decide whether this ever becomes real. If so:
+//   - TODO: host this somewhere that can run a Node process (Pages can't).
+//   - TODO: replace exampleWeatherFor's made-up numbers with a real
+//     provider (Open-Meteo, NWS, etc.).
+//   - TODO: wire src/weather/ to actually fetch from this instead of its
+//     own local simulation, if that's even still desired.
+// If not, this folder (and public/api/*.json) should just be deleted.
 import { createServer } from 'node:http';
 import { LOCATIONS, CONDITIONS, findLocation } from './locations.js';
 import { currentState } from './db.js';

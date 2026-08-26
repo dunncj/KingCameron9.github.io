@@ -1,0 +1,356 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="Cameron Dunn, Software Engineer Intern at Tesla (FleetNet), CS @ UIUC. Simplified, no-frills version of the site." />
+    <title>Cameron Dunn</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0d0e12;
+        --panel: #16181f;
+        --panel-hover: #1b1e26;
+        --border: rgba(255, 255, 255, 0.1);
+        --text: #f2f4f8;
+        --muted: rgba(242, 244, 248, 0.65);
+        --faint: rgba(242, 244, 248, 0.45);
+        --accent: #6cc7ff;
+      }
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      html { background: var(--bg); }
+      body {
+        background: var(--bg);
+        color: var(--text);
+        font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+        line-height: 1.5;
+        -webkit-font-smoothing: antialiased;
+      }
+      a { color: var(--accent); }
+      main {
+        max-width: 640px;
+        margin: 0 auto;
+        padding: 32px 24px 80px;
+      }
+
+      /* top nav */
+      .topnav {
+        display: flex;
+        justify-content: flex-end;
+        margin-bottom: 18px;
+      }
+      a.back {
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--muted);
+        text-decoration: none;
+        white-space: nowrap;
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        padding: 6px 14px;
+        transition: color 0.15s ease, border-color 0.15s ease;
+      }
+      a.back:hover {
+        color: var(--accent);
+        border-color: rgba(108, 199, 255, 0.4);
+      }
+
+      /* hero */
+      .hero {
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        overflow: hidden;
+        background: var(--panel);
+        margin-bottom: 40px;
+      }
+      .hero-banner {
+        display: block;
+        width: 100%;
+        height: 150px;
+        object-fit: cover;
+        object-position: center 65%;
+        image-rendering: pixelated;
+        background: #1a2230;
+      }
+      .hero-body {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        padding: 18px 20px 22px;
+        margin-top: -30px;
+      }
+      .avatar {
+        width: 64px;
+        height: 64px;
+        border-radius: 12px;
+        border: 3px solid var(--panel);
+        image-rendering: pixelated;
+        background: #0d0e12;
+        flex-shrink: 0;
+        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
+      }
+      h1 { font-size: 22px; font-weight: 700; }
+      .tagline { font-size: 13px; color: var(--muted); margin-top: 3px; }
+
+      section { margin-bottom: 36px; }
+      h2 {
+        font-size: 11px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--muted);
+        margin-bottom: 14px;
+      }
+      p.intro { font-size: 15px; }
+      ul.interests {
+        list-style: none;
+        padding: 0;
+        font-size: 13.5px;
+        color: var(--muted);
+        margin-top: 12px;
+        display: grid;
+        gap: 6px;
+      }
+      ul.interests li { padding-left: 16px; position: relative; }
+      ul.interests li::before {
+        content: "";
+        position: absolute;
+        left: 0;
+        top: 8px;
+        width: 5px;
+        height: 5px;
+        border-radius: 1px;
+        background: var(--accent);
+        opacity: 0.75;
+      }
+
+      .job {
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 14px 16px;
+        margin-bottom: 10px;
+        transition: border-color 0.15s ease, background 0.15s ease;
+      }
+      .job:hover {
+        border-color: rgba(108, 199, 255, 0.3);
+        background: var(--panel-hover);
+      }
+      .job-head {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+      .job-org { font-size: 14.5px; font-weight: 700; }
+      .job-period { font-size: 11px; color: var(--faint); white-space: nowrap; }
+      .job-role { font-size: 12px; color: var(--muted); margin-top: 2px; }
+      .job-line { font-size: 13px; margin-top: 8px; opacity: 0.9; }
+
+      .projects {
+        display: grid;
+        gap: 10px;
+      }
+      .project {
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 14px 16px;
+        transition: border-color 0.15s ease, background 0.15s ease;
+      }
+      .project:hover {
+        border-color: rgba(108, 199, 255, 0.3);
+        background: var(--panel-hover);
+      }
+      .project-head {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+      .project-name { font-size: 14.5px; font-weight: 700; }
+      .project-stack { font-size: 11px; color: var(--faint); white-space: nowrap; }
+      .project-line { font-size: 13px; margin-top: 8px; opacity: 0.9; }
+
+      .skills {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+      .skills span {
+        font-size: 12px;
+        font-weight: 600;
+        padding: 5px 10px;
+        border-radius: 999px;
+        border: 1px solid var(--border);
+        background: var(--panel);
+      }
+
+      .contact { display: flex; gap: 16px; font-size: 13px; font-weight: 600; }
+      .contact a { text-decoration: none; }
+      .contact a:hover { text-decoration: underline; }
+
+      footer {
+        margin-top: 48px;
+        padding-top: 20px;
+        border-top: 1px solid var(--border);
+        font-size: 12px;
+        color: var(--muted);
+      }
+      footer a { text-decoration: none; }
+      footer a:hover { text-decoration: underline; }
+
+      @media (max-width: 420px) {
+        .hero-banner { height: 110px; }
+        .hero-body { flex-wrap: wrap; margin-top: -24px; }
+        .avatar { width: 56px; height: 56px; }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="topnav">
+        <a class="back" href="/">&larr; 3D view</a>
+      </div>
+
+      <header class="hero">
+        <img
+          class="hero-banner"
+          src="/images/uiuc-quad.png"
+          alt="Pixel art illustration of UIUC's Foellinger Auditorium"
+        />
+        <div class="hero-body">
+          <img
+            class="avatar"
+            src="/images/headshot-pixel.png"
+            alt="Pixel art headshot of Cameron Dunn"
+          />
+          <div>
+            <h1>Cameron Dunn</h1>
+            <p class="tagline">Software Engineer Intern at Tesla (FleetNet) &middot; CS @ UIUC</p>
+          </div>
+        </div>
+      </header>
+
+      <section>
+        <h2>About</h2>
+        <p class="intro">Software Engineer Intern at Tesla (FleetNet). CS @ UIUC. Recruiting for internships Spring and Summer 2027.</p>
+        <ul class="interests">
+          <li>Distributed systems</li>
+          <li>Networking</li>
+          <li>Linux and infrastructure</li>
+          <li>Low-latency and performance</li>
+          <li>Development tools and automation</li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>Experience</h2>
+
+        <div class="job">
+          <div class="job-head">
+            <span class="job-org">Tesla</span>
+            <span class="job-period">Aug 2026 – Present</span>
+          </div>
+          <div class="job-role">Software Engineer Intern, FleetNet</div>
+          <div class="job-line">Building Go microservices on FleetNet, the connectivity platform behind Tesla's Robotaxi fleet.</div>
+        </div>
+
+        <div class="job">
+          <div class="job-head">
+            <span class="job-org">VTG</span>
+            <span class="job-period">May – Jul 2026</span>
+          </div>
+          <div class="job-role">DevOps Engineer Intern</div>
+          <div class="job-line">Deployed Kubernetes workloads for naval combat systems; built a Go tool that now enforces architecture rules in CI.</div>
+        </div>
+
+        <div class="job">
+          <div class="job-head">
+            <span class="job-org">Frontier Foundries</span>
+            <span class="job-period">Dec 2025 – Apr 2026</span>
+          </div>
+          <div class="job-role">AI Systems Intern</div>
+          <div class="job-line">Built Rust/Go pipelines and LLM validation systems for on-prem AI serving defense and financial clients.</div>
+        </div>
+
+        <div class="job">
+          <div class="job-head">
+            <span class="job-org">UIUC BCI Lab</span>
+            <span class="job-period">Aug 2025 – May 2026</span>
+          </div>
+          <div class="job-role">Undergraduate Research Assistant</div>
+          <div class="job-line">Decoded live EEG signals into real-time robot commands, 62% accuracy, ~200ms latency.</div>
+        </div>
+
+        <div class="job">
+          <div class="job-head">
+            <span class="job-org">The Meridian Lasso</span>
+            <span class="job-period">Nov 2024 – May 2025</span>
+          </div>
+          <div class="job-role">Software Engineer</div>
+          <div class="job-line">Built a full-stack editorial platform serving 1,000+ monthly users; cut hosting costs ~95%.</div>
+        </div>
+
+        <div class="job">
+          <div class="job-head">
+            <span class="job-org">Welcoming Falls Church</span>
+            <span class="job-period">Jan 2024 – Dec 2025</span>
+          </div>
+          <div class="job-role">Web Administrator</div>
+          <div class="job-line">Administer production infrastructure supporting 500+ users at 99.9% uptime.</div>
+        </div>
+      </section>
+
+      <section>
+        <h2>Projects</h2>
+        <div class="projects">
+          <div class="project">
+            <div class="project-head">
+              <span class="project-name">CodeQuest</span>
+              <span class="project-stack">TypeScript &middot; WebRTC &middot; Docker</span>
+            </div>
+            <div class="project-line">A fully peer-to-peer collaborative coding platform, the server only handles signaling; 50+ concurrent users, no central relay.</div>
+          </div>
+
+          <div class="project">
+            <div class="project-head">
+              <span class="project-name">P2P Networking Research</span>
+              <span class="project-stack">C++ &middot; WebRTC &middot; Linux</span>
+            </div>
+            <div class="project-line">Simulated peer-to-peer routing at scale, cutting bandwidth overhead ~70% through adaptive routing.</div>
+          </div>
+
+          <div class="project">
+            <div class="project-head">
+              <span class="project-name">Homelab (agartha)</span>
+              <span class="project-stack">NixOS &middot; Kubernetes &middot; Tailscale</span>
+            </div>
+            <div class="project-line">A declarative NixOS + Kubernetes homelab running 8 self-hosted services at 99.99% uptime.</div>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <h2>Skills</h2>
+        <div class="skills">
+          <span>Go</span><span>Rust</span><span>Python</span><span>TypeScript</span><span>C++</span>
+          <span>React</span><span>Kubernetes</span><span>Docker</span><span>Linux</span>
+          <span>Kafka</span><span>PyTorch</span><span>AI</span><span>Distributed Systems</span>
+        </div>
+      </section>
+
+      <section>
+        <h2>Contact</h2>
+        <div class="contact">
+          <a href="https://github.com/dunncj" target="_blank" rel="noopener">GitHub</a>
+          <a href="https://linkedin.com/in/cdin" target="_blank" rel="noopener">LinkedIn</a>
+        </div>
+      </section>
+
+      <footer>
+        Prefer the interactive version? <a href="/">Head back to the 3D globe &rarr;</a>
+      </footer>
+    </main>
+  </body>
+</html>

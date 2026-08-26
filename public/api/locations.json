@@ -1,0 +1,30 @@
+[
+  {
+    "slug": "palo-alto",
+    "label": "Palo Alto, CA",
+    "lat": 37.418084,
+    "lon": -122.145394,
+    "utcOffset": -8
+  },
+  {
+    "slug": "urbana",
+    "label": "Urbana, IL",
+    "lat": 40.109179,
+    "lon": -88.227243,
+    "utcOffset": -6
+  },
+  {
+    "slug": "falls-church",
+    "label": "Falls Church, VA",
+    "lat": 38.897236,
+    "lon": -77.190797,
+    "utcOffset": -5
+  },
+  {
+    "slug": "chantilly",
+    "label": "Chantilly, VA",
+    "lat": 38.873825,
+    "lon": -77.441261,
+    "utcOffset": -5
+  }
+]

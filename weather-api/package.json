@@ -1,7 +1,7 @@
 {
   "name": "weather-api",
   "version": "1.0.0",
-  "description": "Standalone wrapper API that returns example weather data for the website's locations.",
+  "description": "TEMP/SCAFFOLD, not deployed anywhere and not called by the live site. See the TODO comment at the top of server.js.",
   "type": "module",
   "main": "server.js",
   "scripts": {

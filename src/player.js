@@ -342,5 +342,9 @@ export function buildPlayerPanel(opts) {
       speedIndex = speedIdx;
       renderControls();
     },
+    // Hidden on the landing page (main.js) — nothing here (weather/temp/
+    // time of a *place*) means anything before the visitor has actually
+    // entered the overview.
+    setVisible: (visible) => { panel.style.display = visible ? '' : 'none'; },
   };
 }

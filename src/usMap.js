@@ -133,11 +133,67 @@ function easeInOutCubic(x) {
   return x < 0.5 ? 4 * x * x * x : 1 - (-2 * x + 2) ** 3 / 2;
 }
 
+// The site's landing state (see `landing` param below): a very-zoomed-out,
+// slowly auto-rotating globe with no input wired up except a plain click,
+// which hands off into the exact same flyOut() a normal overview uses to
+// settle into its resting framing — a real mountUSOverview mount the whole
+// time, one continuous scene/camera, never a separate page or a hard cut.
+// Entering costs nothing beyond clearing two flags and letting flyOut() run.
+const LANDING_LAT = 15; // fixed viewing latitude while spinning — off-equator reads less flat than 0
+const LANDING_START_LON = -40; // mid-Atlantic — the Americas rotate into view within the first few seconds
+const LANDING_ALTITUDE_RADII = 7; // camera distance from Earth's center, in multiples of EARTH_RADIUS_SCENE
+const LANDING_SPIN_DEG_PER_SEC = 3.5; // full rotation every ~103s
+// See flyOut's own comment on why landing's entry uses these instead of
+// the shared flyInParams timing every other flyOut() call keeps.
+const LANDING_ENTER_MS = 1300;
+const LANDING_ENTER_PAN_MS = 500;
+// See flyIntoLanding — the reverse trip, one single eased duration since
+// there's no separate pan/zoom pairing to balance against each other.
+const LANDING_EXIT_MS = 1300;
+
+// Scrolling in past this (see stepZoomVelocity) dives into the nearest
+// marker instead of continuing to zoom the flat overview any deeper — the
+// live per-cell grid is tuned to read well for a continental/regional
+// view, not as a substitute for the real ground-level 3D flythrough.
+// WORLD_ZOOM_IN_EXIT_OVERSCROLL: how much sustained zoom-unit "push" past
+// that limit it takes to actually trigger the dive — just enough that a
+// single stray tick right at the edge doesn't launch a transition nobody
+// meant to start (see WHEEL_ZOOM_IN_SENSITIVITY's own comment on one
+// notch's typical displacement). A real threshold worth requiring
+// sustained pressure for, since diving into a location has a real cost to
+// back out of.
+const WORLD_ZOOM_IN_LIMIT = 7;
+const WORLD_ZOOM_IN_EXIT_OVERSCROLL = 2;
+// World view's own scroll-out floor sits close to the resting shot, not
+// down at minZoom (2 — a "see a huge stretch of the globe" floor meant for
+// far-out camera framing in general, not for how far a visitor should have
+// to scroll before leaving). restingZoom() - WORLD_ZOOM_OUT_ROOM is that
+// floor (see stepZoomVelocity) — only a little room to scroll out at all
+// before hitting the edge. No extra margin/overscroll past the floor
+// either (unlike the zoom-in case above) — crossing it leaves for landing
+// on that same frame. An earlier version required extra sustained push
+// past the floor on top of reaching it, but a single scroll gesture's
+// impulse is finite (see WHEEL_ZOOM_IN_SENSITIVITY's own comment on one
+// notch's typical displacement) — often just enough to reach the floor
+// and no further, so the camera sat clamped there with nothing happening
+// until a second, separate scroll finally pushed past the margin too.
+// Landing has no marker to reframe on and no destination to center, so
+// "went a bit too far" costs nothing to back out of, unlike a ground dive
+// — no reason to make the visitor push twice to confirm it.
+const WORLD_ZOOM_OUT_ROOM = 0.5;
+
 // Mounts the globe into the app's real scene/camera/controls/renderer —
-// `locations`: [{ name, lat, lon, onSelect() }]. Returns `{ dispose }`.
+// `locations`: [{ name, lat, lon, onSelect() }]. `landing`: opens very
+// zoomed out with a slow auto-rotate and no pan/zoom/marker/title input,
+// only a plain click, which flies into the normal resting framing exactly
+// like flyOut() (see LANDING_* above) and reveals the title/markers/zoom-
+// out-button it started with hidden. `onLandingChange(isLanding)`, if
+// given, fires every time landing mode starts/ends — main.js uses it to
+// hide/show its own persistent UI (the player panel) that landing has no
+// use for. Returns `{ dispose }`.
 export function mountUSOverview({
   scene, camera, controls, renderer, apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY, locations = [],
-  onActivity, seed,
+  onActivity, seed, landing = false, onLandingChange,
 }) {
   if (activeProvider.requiresApiKey && !apiKey) console.error(`US overview: missing VITE_GOOGLE_MAPS_API_KEY (required by tiles provider "${activeProvider.id}")`);
 
@@ -167,6 +223,13 @@ export function mountUSOverview({
   let tiltAzimuthRad = 0;
   let flying = false;
   let flyRaf = null;
+  // True from mount until the visitor's first click — see LANDING_* above
+  // and enterFromLanding below. Every input handler that shouldn't respond
+  // pre-entry (wheel, drag, hover-preload) checks this the same way they
+  // already check `flying`.
+  let landingActive = landing;
+  let landingRaf = null;
+  onLandingChange?.(landingActive);
 
   function vFovRad() {
     return (camera.fov * Math.PI) / 180;
@@ -292,7 +355,11 @@ export function mountUSOverview({
     camera.aspect = viewportW / viewportH;
     camera.updateProjectionMatrix();
     computeZoomBounds();
-    zoom = Math.min(maxZoom, Math.max(minZoom, zoom));
+    // Landing's zoom is deliberately outside [minZoom, maxZoom] (see
+    // LANDING_ALTITUDE_RADII) — clamping it into range on every resize
+    // would yank the camera sharply closer the instant a visitor so much
+    // as resizes their window before ever clicking.
+    if (!landingActive) zoom = Math.min(maxZoom, Math.max(minZoom, zoom));
     applyCamera();
   }
 
@@ -344,6 +411,9 @@ export function mountUSOverview({
       if (m) flyTo(m.loc);
     },
   );
+  // Nothing to click through to yet during landing — see enterFromLanding,
+  // which reveals these the instant the visitor actually enters.
+  markerOverlay.setVisible(!landingActive);
   function updateMarkers() {
     // The camera-frustum check below only knows about near/far clipping —
     // it has no idea the globe itself is a solid, opaque ball. A marker on
@@ -369,6 +439,24 @@ export function mountUSOverview({
       return { id: m.loc.name, px, py, visible };
     });
     markerOverlay.update(projections);
+  }
+
+  // Scrolling in past WORLD_ZOOM_IN_LIMIT (see stepZoomVelocity) has no
+  // specific marker the way a click does — this picks whichever one the
+  // camera happens to be closest to right now, straight-line through the
+  // globe (fine at this coarse a distinction between only 4 sparse
+  // locations; no need for a true great-circle distance).
+  const nearestMarkerVec = new Vector3();
+  function nearestMarker() {
+    if (markers.length === 0) return null;
+    nearestMarkerVec.copy(sphereXYZ(centerLat, centerLon, EARTH_RADIUS_SCENE));
+    let best = null;
+    let bestDistSq = Infinity;
+    for (const m of markers) {
+      const distSq = nearestMarkerVec.distanceToSquared(m.pos);
+      if (distSq < bestDistSq) { bestDistSq = distSq; best = m; }
+    }
+    return best;
   }
 
   // --- Click a marker: pan (no zoom) to center the camera directly above
@@ -842,6 +930,12 @@ export function mountUSOverview({
   // stays put for the whole flick-and-glide, not just its first frame.
   let lastWheelX = 0;
   let lastWheelY = 0;
+  // Sustained zoom-unit "push" past WORLD_ZOOM_IN_LIMIT — see its own
+  // comment and stepZoomVelocity below, where it resets back to 0 the
+  // instant the wheel isn't actively pushing past that edge anymore. The
+  // zoom-out-to-landing case doesn't need an equivalent — see
+  // WORLD_ZOOM_OUT_ROOM's own comment.
+  let worldZoomInOverscroll = 0;
 
   function stepZoomVelocity() {
     let lastT = performance.now();
@@ -872,8 +966,41 @@ export function mountUSOverview({
         // every subsequent frame too, reading as the zoom having frozen.
         // Skipping the correction outright on a miss avoids ever injecting
         // that jump in the first place.
+        // World view's own scroll-triggered transitions — see
+        // WORLD_ZOOM_IN_LIMIT's own comment. Checked against the
+        // pre-clamp desired value (not the eventual clamped `zoom`) so
+        // sustained pressure against the edge actually accumulates instead
+        // of clamping to a dead stop that never registers as "still
+        // pushing".
+        const desired = zoom - applied;
+        if (desired > WORLD_ZOOM_IN_LIMIT) {
+          worldZoomInOverscroll += desired - WORLD_ZOOM_IN_LIMIT;
+          if (worldZoomInOverscroll >= WORLD_ZOOM_IN_EXIT_OVERSCROLL) {
+            worldZoomInOverscroll = 0;
+            stopZoomVelocity();
+            const nearest = nearestMarker();
+            if (nearest) flyTo(nearest.loc);
+            return;
+          }
+        } else {
+          worldZoomInOverscroll = 0;
+        }
+        // No sustained-pressure buildup and no extra margin here, unlike
+        // the zoom-in case above — crossing the world view's own
+        // scroll-out floor (restingZoom() - WORLD_ZOOM_OUT_ROOM, not
+        // minZoom — see its own comment) leaves for landing on this same
+        // frame. See WORLD_ZOOM_OUT_ROOM's own comment on why: an earlier
+        // version required extra push past the floor too, which just
+        // pinned the camera there with nothing happening whenever a single
+        // scroll gesture's impulse ran out right at the edge.
+        const worldZoomOutFloor = restingZoom() - WORLD_ZOOM_OUT_ROOM;
+        if (desired < worldZoomOutFloor) {
+          stopZoomVelocity();
+          flyIntoLanding();
+          return;
+        }
         const before = raySphereLatLon(lastWheelX, lastWheelY);
-        zoom = Math.min(maxZoom, Math.max(minZoom, zoom - applied));
+        zoom = Math.min(WORLD_ZOOM_IN_LIMIT, Math.max(worldZoomOutFloor, desired));
         applyCamera();
         const after = raySphereLatLon(lastWheelX, lastWheelY);
         if (before && after) {
@@ -899,6 +1026,15 @@ export function mountUSOverview({
 
   function onWheel(e) {
     if (flying) return;
+    // Landing's only way in: scrolling in, mirroring how scrolling in/out
+    // drives every other transition in this three-tier landing/world/ground
+    // hierarchy (see WORLD_ZOOM_IN_LIMIT and localCameraControl's own
+    // onExitToOverview for the other two). Scrolling OUT while landing is a
+    // no-op — there's nothing further out than landing to reach.
+    if (landingActive) {
+      if (e.deltaY < 0) enterFromLanding();
+      return;
+    }
     e.preventDefault();
     // Re-centers toward wherever the cursor was on the *most recent* wheel
     // event of the current flick-and-glide, not a fresh point every frame
@@ -934,7 +1070,7 @@ export function mountUSOverview({
   }
 
   function onPointerDown(e) {
-    if (flying) return;
+    if (flying || landingActive) return;
     stopMomentum();
     dragging = true;
     lastX = e.clientX;
@@ -1004,7 +1140,7 @@ export function mountUSOverview({
   const hoverFired = new Map(); // loc.name -> last-fired timestamp, for hoverParams.debounceMs
   function onHoverCheck(e) {
     onActivity?.();
-    if (dragging || flying) return;
+    if (dragging || flying || landingActive) return;
     const now = performance.now();
     for (const m of markers) {
       const point = markerOverlay.getScreenPoint(m.loc.name);
@@ -1019,7 +1155,7 @@ export function mountUSOverview({
   }
 
   const prevCursor = renderer.domElement.style.cursor;
-  renderer.domElement.style.cursor = 'grab';
+  renderer.domElement.style.cursor = landingActive ? 'default' : 'grab';
   // domParent, not renderer.domElement: the marker <div>s (see buildMarker)
   // are siblings of the canvas under domParent, not descendants of it, so a
   // listener scoped to the canvas alone never sees a wheel event whose
@@ -1034,6 +1170,28 @@ export function mountUSOverview({
   window.addEventListener('mouseup', onPointerUp);
   window.addEventListener('resize', resize);
 
+  // Ends landing mode: reveals the normal UI (title, markers, zoom-out
+  // button), then reuses flyOut() as-is to ease from wherever the spin
+  // happened to be into the exact same resting framing a fresh non-landing
+  // mount opens on — the same camera-only transition every other overview
+  // entry uses, no separate page, no separate animation to keep in sync
+  // with flyOut's own tuning.
+  function enterFromLanding() {
+    if (!landingActive || flying) return;
+    landingActive = false;
+    onLandingChange?.(false);
+    if (landingRaf) { cancelAnimationFrame(landingRaf); landingRaf = null; }
+    renderer.domElement.style.cursor = 'grab';
+    title.style.display = '';
+    markerOverlay.setVisible(true);
+    // Hidden, not removed — flyIntoLanding (scrolling back out past
+    // minZoom) re-shows this same element rather than recreating it.
+    if (landingHintEl) landingHintEl.style.display = 'none';
+    flyOut({
+      durationMs: LANDING_ENTER_MS, panDurationMs: LANDING_ENTER_PAN_MS, curve: easeInOutCubic, blurScale: 0,
+    });
+  }
+
   // --- "Explore" title + skip button, overlaid on the canvas -----------------
   const title = document.createElement('div');
   title.textContent = 'Explore';
@@ -1043,7 +1201,25 @@ export function mountUSOverview({
     color: #f2f4f8; opacity: 0.75; text-shadow: 0 2px 8px rgba(0,0,0,0.6);
     pointer-events: none; z-index: 20;
   `;
+  if (landingActive) title.style.display = 'none';
   domParent.appendChild(title);
+
+  // The only hint a first-time visitor gets that scrolling in on the
+  // slowly-spinning globe enters it — see enterFromLanding, which removes
+  // this the instant it fires. null once landing mode has ended (checked
+  // nowhere else; enterFromLanding nulls it out right after removing it).
+  let landingHintEl = null;
+  if (landingActive) {
+    landingHintEl = document.createElement('div');
+    landingHintEl.textContent = 'Scroll in to explore';
+    landingHintEl.style.cssText = `
+      position: fixed; left: 50%; bottom: 15%; transform: translateX(-50%);
+      font: 600 13px system-ui, -apple-system, sans-serif; letter-spacing: 0.08em; text-transform: uppercase;
+      color: #f2f4f8; opacity: 0.75; text-shadow: 0 2px 8px rgba(0,0,0,0.6);
+      pointer-events: none; z-index: 20;
+    `;
+    domParent.appendChild(landingHintEl);
+  }
 
   // Only for a provider that doesn't already bake its own credit into the
   // fetched imagery (Google does; see mapProviders.js's own comment) —
@@ -1096,7 +1272,7 @@ export function mountUSOverview({
   // flyTo/flyOut, resize) rather than needing a matching call at each one.
   const ZOOM_OUT_VISIBLE_EPSILON = 0.05;
   function updateZoomOutButtonVisibility() {
-    zoomOutBtn.style.display = zoom > restingZoom() + ZOOM_OUT_VISIBLE_EPSILON ? '' : 'none';
+    zoomOutBtn.style.display = !landingActive && zoom > restingZoom() + ZOOM_OUT_VISIBLE_EPSILON ? '' : 'none';
   }
 
   // Debug reference point: a fixed dot at the exact geometric center of the
@@ -1155,14 +1331,34 @@ export function mountUSOverview({
     centerLat = seed.lat;
     centerLon = seed.lon;
     tiltAzimuthRad = seed.bearing ?? 0;
+  } else if (landingActive) {
+    centerLat = LANDING_LAT;
+    centerLon = LANDING_START_LON;
+    tiltAzimuthRad = 0;
   } else {
     centerLat = (US_FRAME_BOUNDS.south + US_FRAME_BOUNDS.north) / 2;
     centerLon = (US_FRAME_BOUNDS.west + US_FRAME_BOUNDS.east) / 2;
     tiltAzimuthRad = restingAzimuthRad;
   }
   computeZoomBounds();
-  zoom = seed ? Math.min(maxZoom, Math.max(minZoom, seed.zoom)) : restingZoom();
-  entryZoom = seed ? Math.min(maxZoom, Math.max(minZoom, initialUSFitZoom())) : zoom;
+  // landingActive's zoom is deliberately outside [minZoom, maxZoom] — see
+  // LANDING_ALTITUDE_RADII — so it bypasses that clamp same as seed's own
+  // explicit min/max does for a different reason (an out-of-range seed
+  // would mean a bug upstream, not a deliberate choice).
+  zoom = seed
+    ? Math.min(maxZoom, Math.max(minZoom, seed.zoom))
+    : (landingActive ? zoomForAltitude(EARTH_RADIUS_SCENE * LANDING_ALTITUDE_RADII) : restingZoom());
+  // entryZoom feeds the persistent whole-globe backdrop's own fetch
+  // resolution (see ensureGlobeBase below) and is fetched once, cached for
+  // this mount's whole lifetime — it must NOT track landingActive's own
+  // much-coarser starting `zoom`, or that backdrop would stay stuck at
+  // landing's own low resolution even after flyOut() zooms back in past
+  // it. restingZoom() is the same "how far out is the normal resting
+  // shot" value a non-landing mount's own `zoom` already equals here — landing
+  // just starts its actual camera farther out than that, not this floor.
+  entryZoom = seed
+    ? Math.min(maxZoom, Math.max(minZoom, initialUSFitZoom()))
+    : (landingActive ? restingZoom() : zoom);
   resize();
   wholeGlobeZ = ensureGlobeBase(
     scene,
@@ -1182,6 +1378,25 @@ export function mountUSOverview({
   if (seed) prefetchDestinationGrid(seed.lat, seed.lon);
   if (seed) flyOut();
 
+  // Idle auto-rotate while landingActive — deliberately does NOT call
+  // ensureGrid() per frame the way drag-panning does: at this altitude the
+  // persistent whole-globe base (see ensureGlobeBase above) is already all
+  // that's visible, and a continuously-changing centerLon would otherwise
+  // mean an endless stream of live-grid fetches for tiles indistinguishable
+  // from that backdrop, for however long a visitor leaves the tab open
+  // before ever clicking.
+  let landingLastT = 0;
+  function landingSpinStep(now) {
+    if (!landingActive) return;
+    const dt = landingLastT ? Math.min(64, now - landingLastT) : 16;
+    landingLastT = now;
+    centerLon += (LANDING_SPIN_DEG_PER_SEC * dt) / 1000;
+    clampCenter();
+    applyCamera();
+    landingRaf = requestAnimationFrame(landingSpinStep);
+  }
+  if (landingActive) landingRaf = requestAnimationFrame(landingSpinStep);
+
   // The reverse of flyTo — eases zoom/pan/bearing from wherever flyTo (or a
   // seeded mount, see above) left off back out to the normal whole-US
   // resting framing, rather than an instant unexplained snap. Deliberately
@@ -1190,7 +1405,25 @@ export function mountUSOverview({
   // momentum the local ascend that led here already had — and settles
   // gently into the resting view, instead of easing in a second time right
   // after the ascend already did.
-  function flyOut() {
+  // durationMs/panDurationMs/curve/blurScale: only landingActive's own call
+  // overrides these (see enterFromLanding) — every other call site keeps the
+  // shared, already-tuned flyInParams timing, zoomOut/panOut curves, and
+  // full motion blur unchanged. Landing needed its own timing/curve because
+  // it starts from a much farther, differently-shaped zoom range than the
+  // local-view ascend this function was originally tuned for (see
+  // LANDING_ALTITUDE_RADII): reusing zoomOut's hyperbolic curve unscaled
+  // there read as a long, barely-moving crawl for most of the flight
+  // followed by a sudden late rush — easeInOutCubic (already used for
+  // azimuth above) paces evenly across the whole flight instead, with a
+  // genuinely soft deceleration at the very end rather than a hard cutoff
+  // once the rAF loop stops. blurScale is separate from that: the motion
+  // blur itself sells a *ground-level* dive (something physically close
+  // rushing past) — landing's dive is through empty space toward a distant
+  // planet the whole way, where that cue doesn't read as anything, so
+  // landing zeroes it out rather than just toning it down.
+  function flyOut({
+    durationMs, panDurationMs, curve, blurScale = 1,
+  } = {}) {
     if (flying) return;
     stopMomentum();
     flying = true;
@@ -1209,14 +1442,15 @@ export function mountUSOverview({
     // Shortest-path back to restingAzimuthRad — see flyTo's identical comment on 0.
     let azimuthDelta = restingAzimuthRad - startAzimuth;
     azimuthDelta = ((azimuthDelta % (2 * Math.PI)) + 3 * Math.PI) % (2 * Math.PI) - Math.PI;
-    const { ms: flyMs, panMs } = flyInParams;
+    const flyMs = durationMs ?? flyInParams.ms;
+    const panMs = panDurationMs ?? flyInParams.panMs;
     // The reverse of flyTo's own pairing (see getMovementCurve/movementParams
     // in flightCurves.ts): zoom opens at full curve speed here — carrying
     // whatever momentum the local ascend that led here already had — while
     // pan opens slow and only picks up speed as zoom's own speed fades, so
     // the two swap dominance the other way around from flyTo.
-    const zoomCurve = getMovementCurve('zoomOut');
-    const panCurve = getMovementCurve('panOut');
+    const zoomCurve = curve ?? getMovementCurve('zoomOut');
+    const panCurve = curve ?? getMovementCurve('panOut');
     const t0 = performance.now();
     overviewFlightState.active = true;
     function step(now) {
@@ -1233,7 +1467,7 @@ export function mountUSOverview({
       centerLon = startLon + (destLon - startLon) * panE;
       zoom = startZoom + (destZoom - startZoom) * zoomE;
       tiltAzimuthRad = startAzimuth + azimuthDelta * azimuthE;
-      overviewFlightState.blurStrength = 1 - zoomE;
+      overviewFlightState.blurStrength = (1 - zoomE) * blurScale;
       applyCamera();
       ensureGrid();
       if (elapsed < flyMs) {
@@ -1247,8 +1481,59 @@ export function mountUSOverview({
     flyRaf = requestAnimationFrame(step);
   }
 
+  // The reverse of enterFromLanding — scrolling out past minZoom (see
+  // stepZoomVelocity) eases back out to landing's own far zoom and re-hides
+  // the normal UI, then resumes the idle auto-rotate from wherever this
+  // landed rather than snapping back to LANDING_START_LON. A single eased
+  // progress drives lat/zoom/azimuth together — unlike flyOut/flyTo there's
+  // no destination framing to race pan ahead of or trail behind, just a
+  // plain ease back out.
+  function flyIntoLanding() {
+    if (flying) return;
+    stopMomentum();
+    flying = true;
+    landingActive = true;
+    onLandingChange?.(true);
+    renderer.domElement.style.cursor = 'pointer';
+    title.style.display = 'none';
+    markerOverlay.setVisible(false);
+    if (landingHintEl) landingHintEl.style.display = '';
+    const startLat = centerLat;
+    const startLon = centerLon;
+    const startZoom = zoom;
+    const startAzimuth = tiltAzimuthRad;
+    const destLat = LANDING_LAT;
+    const destZoom = zoomForAltitude(EARTH_RADIUS_SCENE * LANDING_ALTITUDE_RADII);
+    let azimuthDelta = -startAzimuth; // landing's own azimuth is always 0
+    azimuthDelta = ((azimuthDelta % (2 * Math.PI)) + 3 * Math.PI) % (2 * Math.PI) - Math.PI;
+    const t0 = performance.now();
+    overviewFlightState.active = true;
+    function step(now) {
+      const elapsed = now - t0;
+      const e = easeInOutCubic(Math.min(elapsed / LANDING_EXIT_MS, 1));
+      centerLat = startLat + (destLat - startLat) * e;
+      centerLon = startLon; // no forced pan — the resumed spin just carries on from here
+      zoom = startZoom + (destZoom - startZoom) * e;
+      tiltAzimuthRad = startAzimuth + azimuthDelta * e;
+      // No motion blur leaving toward landing either — see flyOut's own
+      // blurScale comment on why space doesn't get this cue.
+      applyCamera();
+      ensureGrid();
+      if (elapsed < LANDING_EXIT_MS) {
+        flyRaf = requestAnimationFrame(step);
+      } else {
+        flying = false;
+        overviewFlightState.active = false;
+        landingLastT = 0;
+        landingRaf = requestAnimationFrame(landingSpinStep);
+      }
+    }
+    flyRaf = requestAnimationFrame(step);
+  }
+
   function dispose() {
     if (flyRaf) cancelAnimationFrame(flyRaf);
+    if (landingRaf) cancelAnimationFrame(landingRaf);
     stopMomentum();
     camera.near = savedCameraNear;
     camera.updateProjectionMatrix();
@@ -1262,6 +1547,7 @@ export function mountUSOverview({
     renderer.domElement.style.cursor = prevCursor;
     markerOverlay.dispose();
     title.remove();
+    landingHintEl?.remove();
     attributionEl?.remove();
     zoomOutBtn.remove();
     centerDot.remove();

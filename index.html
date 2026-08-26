@@ -4,19 +4,16 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Cameron Dunn</title>
-    <!-- The 3D flythrough lives at /world now, not the site root — this is
-         a real static redirect (a genuine /world/index.html file, not a
-         client-side route), since GitHub Pages can't run a history-API SPA
-         router: an arbitrary deep link like /world with no matching file
-         just 404s there. A meta-refresh plus a JS fallback covers browsers
-         either way, and redirects instantly (content="0"). -->
-    <meta http-equiv="refresh" content="0; url=/world/" />
+    <!-- Warms the DNS/TLS handshake for Google's 3D tiles API before the
+         first tile request actually fires, off the critical render path. -->
+    <link rel="preconnect" href="https://tile.googleapis.com" crossorigin />
     <style>
       * { margin: 0; padding: 0; box-sizing: border-box; }
-      body { background: #000; }
+      body { overflow: hidden; background: #000; }
+      canvas { display: block; }
     </style>
   </head>
   <body>
-    <script>location.replace('/world/');</script>
+    <script type="module" src="/src/main.js"></script>
   </body>
 </html>

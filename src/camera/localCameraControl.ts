@@ -5,22 +5,24 @@ import type { CameraScrollSettings, CameraMoveSettings } from '../settings/types
 
 // Owns every raw-input → camera-motion path for the ground/local view: WASD
 // fly movement (previously loose `held`/`applyMovement` state in main.js)
-// and wheel-driven dolly-zoom (new). A factory function, not a class — see
-// devconsole/commands for the same pattern elsewhere in this codebase.
+// and wheel-driven exit-to-overview (new). A factory function, not a class
+// — see devconsole/commands for the same pattern elsewhere in this
+// codebase.
 //
-// Wheel-zoom is deliberately NOT gated behind the WASD/drag-orbit "controls"
-// toggle (isNavEnabled) the way WASD is — it's meant to always work, the
-// same way scrolling a page always works regardless of what else is turned
-// on. OrbitControls' own built-in wheel-zoom is disabled (see main.js,
-// `controls.enableZoom = false`) so there's exactly one thing moving the
-// camera on wheel input, not two fighting over the same distance.
+// Wheel input is deliberately NOT gated behind the WASD/drag-orbit
+// "controls" toggle (isNavEnabled) the way WASD is — it's meant to always
+// work, the same way scrolling a page always works regardless of what else
+// is turned on. OrbitControls' own built-in wheel-zoom is disabled (see
+// main.js, `controls.enableZoom = false`) so there's exactly one thing
+// responding to wheel input, not two fighting over it.
 //
-// Dollying is a straight position mutation along the camera→target
-// direction with `controls.target` held fixed — safe to do without going
-// through OrbitControls at all, because OrbitControls re-derives its
-// internal spherical offset from the live camera.position/target at the
-// start of every update() call rather than caching it, so it picks up an
-// externally-changed distance on its very next frame.
+// No free dolly-zoom range here at all — this is the innermost tier of the
+// landing/world/ground scroll hierarchy (see usMap.js's own WORLD_ZOOM_IN_
+// LIMIT for the middle tier), so there's nowhere further "in" to scroll to.
+// Scrolling in is simply a no-op (WASD is how you actually get closer to
+// something on the ground); scrolling out, sustained past exitOverscroll,
+// hands off to the globe overview — the same reverse-flight the "Earth
+// View" button triggers.
 const KEY_MAP: Record<string, 'forward' | 'back' | 'left' | 'right' | 'up' | 'down'> = {
   KeyW: 'forward', KeyS: 'back', KeyA: 'left', KeyD: 'right',
   KeyE: 'up', KeyQ: 'down', Space: 'up', ShiftLeft: 'down',
@@ -38,8 +40,9 @@ export interface LocalCameraControlDeps {
   // so it needs its own way to no-op rather than accumulate velocity nobody
   // asked for and unleash it as a jump whenever the ground view comes back.
   isLocalViewActive(): boolean;
-  // Scrolling out past maxDistance + exitOverscroll hands off to the globe
-  // overview — the same reverse-flight the "Earth View" button triggers.
+  // Sustained scroll-out (past exitOverscroll — see applyScrollZoom) hands
+  // off to the globe overview — the same reverse-flight the "Earth View"
+  // button triggers.
   onExitToOverview(): void;
 }
 
@@ -70,9 +73,9 @@ export function createLocalCameraControl(deps: LocalCameraControlDeps): LocalCam
     damping: scrollParams.damping,
     maxSpeed: scrollParams.maxSpeed,
   });
-  // Accumulated "pull" past maxDistance — resets whenever the wheel isn't
-  // actively pushing outward past the edge, so a single wayward scroll tick
-  // can't slowly leak toward triggering an exit over unrelated frames.
+  // Accumulated sustained scroll-out — resets the instant the wheel isn't
+  // actively pushing outward, so a single wayward scroll tick can't slowly
+  // leak toward triggering an exit over unrelated frames.
   let overscroll = 0;
 
   function onKeyDown(e: KeyboardEvent): void {
@@ -115,34 +118,23 @@ export function createLocalCameraControl(deps: LocalCameraControlDeps): LocalCam
     controls.target.add(delta);
   }
 
-  const offset = new THREE.Vector3();
   function applyScrollZoom(dt: number): void {
     const applied = scroll.update(dt);
-    if (applied === 0) return;
-
-    offset.copy(camera.position).sub(controls.target);
-    const distance = offset.length();
-    // Positive deltaY (scrolling "down"/toward you) zooms out — grows
-    // distance — matching the natural page-scroll and OrbitControls'
-    // native wheel-zoom direction.
-    const desired = distance + applied;
-    const clamped = THREE.MathUtils.clamp(desired, scrollParams.minDistance, scrollParams.maxDistance);
-
-    if (desired > scrollParams.maxDistance) {
-      overscroll += desired - scrollParams.maxDistance;
-      if (overscroll >= scrollParams.exitOverscroll) {
-        overscroll = 0;
-        scroll.reset();
-        onExitToOverview();
-        return;
-      }
-    } else {
+    // Positive deltaY (scrolling "down"/toward you) is scroll-OUT —
+    // matching the natural page-scroll and OrbitControls' native
+    // wheel-zoom direction. Scroll-IN (applied <= 0) is simply a no-op:
+    // no free dolly-zoom range exists here at all (see this file's own
+    // top comment) — nothing to trigger, nothing to move.
+    if (applied <= 0) {
       overscroll = 0;
+      return;
     }
-
-    if (clamped === distance) return;
-    offset.setLength(clamped);
-    camera.position.copy(controls.target).add(offset);
+    overscroll += applied;
+    if (overscroll >= scrollParams.exitOverscroll) {
+      overscroll = 0;
+      scroll.reset();
+      onExitToOverview();
+    }
   }
 
   return {

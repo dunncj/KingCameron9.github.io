@@ -7,6 +7,9 @@ import { buildClouds, CLOUD_FORMATIONS } from './clouds.js';
 import { createPostFxService } from './postprocessing';
 import { createWeatherSystem } from './weather';
 import { buildPlayerPanel } from './player.js';
+import { buildBioPanel } from './bioPanel.js';
+import { buildHighlightsPanel } from './highlightsPanel.js';
+import { buildLocationBioPanel } from './locationBioPanel.js';
 import { buildDevConsole } from './devconsole';
 import { buildDevGui as buildDevGuiExternal } from './devGui';
 import { createLocalCameraControl } from './camera/localCameraControl';
@@ -871,6 +874,14 @@ function onArriveAt(name, { push = true } = {}) {
   // shown, and would otherwise leave it stuck hidden with no way back to
   // the overview.
   backToEarthBtn.style.display = 'block';
+  // A deep link straight to /world/<slug> also never mounts the overview
+  // at all, so onLandingChange (the only other place these two hide) never
+  // fires either — without this they'd default to visible, stacked right
+  // on top of this location's own panel.
+  bioPanel.setVisible(false);
+  highlightsPanel.setVisible(false);
+  locationBioPanel.setLocation(name);
+  locationBioPanel.setVisible(true);
   if (push) history.pushState(null, '', `/world/${cfg.slug}`);
 }
 
@@ -974,6 +985,19 @@ playerPanel = buildPlayerPanel({
   initialSpeedIndex: DEFAULT_SPEED_INDEX,
   onModeChange: setTimeMode,
 });
+
+// Landing-page bio panels: bio/experience on the left (bioPanel.js) and a
+// widget-first "Now" panel on the right (highlightsPanel.js) — both stay
+// clear of the center so the globe reads through. Visible only on the
+// landing page itself; onLandingChange below fades them out (the mirror
+// image of the Explore panel, which fades IN once landing ends).
+const bioPanel = buildBioPanel();
+const highlightsPanel = buildHighlightsPanel();
+
+// Left-side counterpart shown while in ground view at a specific location
+// (see onArriveAt/enterOverview below) — same slot bioPanel occupies on
+// the landing page, but they're mutually exclusive so this never overlaps.
+const locationBioPanel = buildLocationBioPanel();
 
 // The landing experience is the pixelated globe overview — one continuous
 // 3D camera throughout, never a hard cut to a separate renderer. It starts
@@ -1101,7 +1125,7 @@ function startZoomOutToOverview() {
 // flyOut), instead of an instant cut to the whole-US view. push=false for
 // the initial page load's own default landing in space, and for popstate
 // syncing back to a URL that's already correct — see onArriveAt's comment.
-function enterOverview(seed, { push = true } = {}) {
+function enterOverview(seed, { push = true, landing = false } = {}) {
   // Defensive, not just the normal path in: browser back/forward can land
   // here while an overview is already mounted (e.g. going from one /world/
   // history entry straight to another) — dispose it first rather than
@@ -1112,6 +1136,7 @@ function enterOverview(seed, { push = true } = {}) {
   backToEarthBtn.style.display = 'none';
   overviewActive = true;
   setLocalViewVisible(false);
+  locationBioPanel.setVisible(false);
   if (playerPanel) { playerPanel.setWeather(SPACE_WEATHER_LABEL); playerPanel.setTemp(SPACE_TEMP_F); }
   if (push) history.pushState(null, '', '/world/');
   // OrbitControls shares the same renderer.domElement usMap.js's own
@@ -1124,6 +1149,21 @@ function enterOverview(seed, { push = true } = {}) {
   overview = mountUSOverview({
     scene, camera, controls, renderer,
     seed,
+    landing,
+    // The player panel reports weather/temp/time for a *place* — none of
+    // that means anything before the visitor has actually entered the
+    // overview, so it stays hidden for as long as landing does.
+    onLandingChange: (isLanding) => {
+      playerPanel?.setVisible(!isLanding);
+      bioPanel.setVisible(isLanding);
+      highlightsPanel.setVisible(isLanding);
+      // Landing lives at root (/); scrolling in out of it is the same
+      // destination /world/ opens directly on, so the URL should reflect
+      // that the moment you're there instead of staying stuck at /.
+      if (!isLanding && window.location.pathname === '/') {
+        history.pushState(null, '', '/world/');
+      }
+    },
     onActivity: () => cache.notifyActivity(),
     // Every travelToLocation destination gets a marker — clicking any of
     // them zooms in, then continues straight into that same dive at ground
@@ -1177,22 +1217,34 @@ const redirectedPath = new URLSearchParams(window.location.search).get('redirect
 if (redirectedPath) history.replaceState(null, '', redirectedPath);
 
 // Deep-linking + browser back/forward: the app boots into whatever the
-// current URL already names — a location's own /world/<slug>, or the
-// overview at plain /world/ — and later back/forward navigation re-syncs
-// to it the same way. Always the instant teleportToLocation/enterOverview
-// path, never an animated flight — browser navigation is expected to land
-// immediately, not sit through the same flight a click gets.
-function syncToPath() {
+// current URL already names — the landing page at plain /, a location's
+// own /world/<slug>, or the overview at plain /world/ — and later back/
+// forward navigation re-syncs to it the same way. Always the instant
+// teleportToLocation/enterOverview path, never an animated flight — browser
+// navigation is expected to land immediately, not sit through the same
+// flight a click gets.
+//
+// `initial` gates the landing state (see enterOverview's `landing` option
+// and usMap.js's LANDING_* constants): only the very first call below, and
+// only for a visit that landed on plain / (root), opens on the
+// slow-spinning globe rather than straight into the interactive resting
+// view — /world with no deep link opens straight into that resting view
+// (the scrolled-in destination landing leads to), a location deep link
+// skips it outright (nothing to spin toward), and every later popstate is
+// expected to re-sync instantly like any other browser-navigation landing,
+// not replay the one-time intro.
+function syncToPath({ initial = false } = {}) {
   const match = window.location.pathname.match(/\/world\/([^/]+)\/?$/);
   const name = match ? matchLocationName(match[1]) : undefined;
   if (name) {
     teleportToLocation(name, { push: false });
   } else {
-    enterOverview(undefined, { push: false });
+    const isRoot = !window.location.pathname.startsWith('/world');
+    enterOverview(undefined, { push: false, landing: isRoot && initial });
   }
 }
 window.addEventListener('popstate', syncToPath);
-syncToPath();
+syncToPath({ initial: true });
 
 // --- Hidden debug console (":" to open) --- see devconsole.ts. Each
 // command is a small factory from src/commands/ (composition-first,

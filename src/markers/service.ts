@@ -24,6 +24,10 @@ export interface MarkerOverlay {
   // The true viewport-relative point a marker's pin sits at — used for
   // hover-proximity checks against real mouse coordinates (e.clientX/Y).
   getScreenPoint(id: string): { x: number; y: number } | null;
+  // Hides/shows both layers outright (not per-marker) — for usMap.js's
+  // landing mode, where markers would otherwise clutter the very-zoomed-out
+  // spinning globe before the visitor has actually entered the overview.
+  setVisible(visible: boolean): void;
   dispose(): void;
 }
 
@@ -228,12 +232,17 @@ export function createMarkerOverlay(
     return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
   }
 
+  function setVisible(visible: boolean) {
+    pinsLayer.style.display = visible ? '' : 'none';
+    labelsLayer.style.display = visible ? '' : 'none';
+  }
+
   function dispose() {
     pinsLayer.remove();
     labelsLayer.remove();
   }
 
   return {
-    update, getScreenPoint, dispose,
+    update, getScreenPoint, setVisible, dispose,
   };
 }

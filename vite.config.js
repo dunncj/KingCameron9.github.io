@@ -33,14 +33,17 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     rollupOptions: {
-      // Multi-page build: the 3D experience lives at /world (a real static
-      // file, not a client-side route — GitHub Pages has no server to run
-      // a history-API router, so a plain HTML entry per path is what
-      // actually makes /world a working, bookmarkable, deep-linkable URL).
-      // Root index.html is just a redirect into it.
+      // Multi-page build: the 3D experience lives at both / (landing) and
+      // /world (the scrolled-in view — see main.js's syncToPath) as real
+      // static files, not a client-side route — GitHub Pages has no server
+      // to run a history-API router, so a plain HTML entry per path is what
+      // actually makes each one a working, bookmarkable, deep-linkable URL.
+      // /simplified is a separate static page entirely (no Three.js), for
+      // visitors who'd rather skip the globe.
       input: {
         main: fileURLToPath(new URL('./index.html', import.meta.url)),
         world: fileURLToPath(new URL('./world/index.html', import.meta.url)),
+        simplified: fileURLToPath(new URL('./simplified/index.html', import.meta.url)),
       },
     },
   },
