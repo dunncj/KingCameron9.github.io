@@ -328,6 +328,12 @@ export function buildBioPanel() {
   simpleLink.innerHTML = 'Prefer simple view? <span>Click here to view simplified →</span>';
   panel.appendChild(simpleLink);
 
+  // Scrolling the bio itself must never reach usMap.js's wheel handler
+  // (bound to document.body, which this panel is a plain sibling of, not
+  // a descendant of the canvas) — left alone, that bubbling reads as
+  // globe-zoom input and can push the landing straight into /world/.
+  panel.addEventListener('wheel', (e) => e.stopPropagation());
+
   document.body.appendChild(panel);
 
   return {

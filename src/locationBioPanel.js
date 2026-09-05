@@ -129,6 +129,12 @@ export function buildLocationBioPanel() {
   lines.className = 'loc-lines';
   panel.appendChild(lines);
 
+  // Scrolling this panel must never reach the ground view's own wheel
+  // dolly-zoom (bound to document.body, which this panel is a plain
+  // sibling of, not a descendant of the canvas) — left alone, that
+  // bubbling reads as camera-zoom input.
+  panel.addEventListener('wheel', (e) => e.stopPropagation());
+
   document.body.appendChild(panel);
 
   return {

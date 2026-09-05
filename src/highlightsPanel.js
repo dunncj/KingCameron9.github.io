@@ -206,6 +206,12 @@ function buildPane(title, extraClass) {
   body.className = 'hl-body';
   pane.appendChild(body);
 
+  // Scrolling within these panes must never reach usMap.js's wheel
+  // handler (bound to document.body, which this pane is a plain sibling
+  // of, not a descendant of the canvas) — left alone, that bubbling reads
+  // as globe-zoom input and can push the landing straight into /world/.
+  pane.addEventListener('wheel', (e) => e.stopPropagation());
+
   return { pane, body };
 }
 
