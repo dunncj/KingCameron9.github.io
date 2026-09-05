@@ -4,6 +4,28 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Cameron Dunn</title>
+    <!-- The 3D globe is heavy (WebGL, Draco decoding, tile streaming) and
+         built for mouse/wheel input, not touch — mobile visitors get
+         bounced to the lightweight /simplified/ page instead, before
+         main.js's own module graph (three.js et al.) ever starts
+         downloading. `?view=full` (set by simplified/index.html's own
+         "3D view" links) or a prior visit's choice opts back out. -->
+    <script>
+      (function () {
+        try {
+          if (sessionStorage.getItem('camdunn:fullView') === '1') return;
+          if (new URLSearchParams(location.search).get('view') === 'full') {
+            sessionStorage.setItem('camdunn:fullView', '1');
+            return;
+          }
+        } catch (e) {}
+        var ua = navigator.userAgent || '';
+        var mobileUA = /Android|iPhone|iPod|Mobile|Windows Phone/i.test(ua);
+        var coarseNarrow = matchMedia('(pointer: coarse)').matches
+          && matchMedia('(max-width: 820px)').matches;
+        if (mobileUA || coarseNarrow) location.replace('/simplified/');
+      })();
+    </script>
     <!-- Warms the DNS/TLS handshake for Google's 3D tiles API before the
          first tile request actually fires, off the critical render path. -->
     <link rel="preconnect" href="https://tile.googleapis.com" crossorigin />
